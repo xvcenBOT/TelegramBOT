@@ -1,15 +1,11 @@
 import firebase_admin
 from firebase_admin import credentials, firestore
 import logging
-
-# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def init_firebase():
     try:
-        # Учетные данные сервисного аккаунта
-        # Рекомендация: Для продакшн вынесите это в файл или переменную окружения
         cred_obj = credentials.Certificate({
             "type": "service_account",
             "project_id": "xvcen-bot",
@@ -25,22 +21,22 @@ def init_firebase():
         })
         firebase_admin.initialize_app(cred_obj)
         db = firestore.client()
-        logger.info("Firebase initialized successfully")
+        logger.info("Firebase initialized")
 
         # Инициализация структуры базы данных
         admin_ref = db.collection('admin_ids').document('init')
         if not admin_ref.get().exists:
             admin_ref.set({'ids': [7302972623, 8274288863]})
-            logger.info("Initialized admin_ids with default IDs")
+            logger.info("admin_ids initialized")
         if not db.collection('user_profile').limit(1).get():
             db.collection('user_profile').document('init').set({})
-            logger.info("Initialized user_profile collection")
+            logger.info("user_profile initialized")
         if not db.collection('deals').limit(1).get():
             db.collection('deals').document('init').set({})
-            logger.info("Initialized deals collection")
+            logger.info("deals initialized")
         if not db.collection('user_details').limit(1).get():
             db.collection('user_details').document('init').set({})
-            logger.info("Initialized user_details collection")
+            logger.info("user_details initialized")
         return db
     except Exception as e:
         logger.error(f"Error initializing Firebase: {e}")

@@ -8,14 +8,11 @@ import re
 from dotenv import load_dotenv
 from telebot.asyncio_handler_backends import State, StatesGroup
 from telebot.asyncio_storage import StateMemoryStorage
+from telebot.asyncio_filters import StateFilter
 from aiohttp import web
 import asyncio
 import logging
 from firebase_config import init_firebase
-
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -40,11 +37,29 @@ GROUP_ID = int(GROUP_ID)
 TOPIC_ID = int(TOPIC_ID)
 
 db = init_firebase()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+_ADMIN_IDS_CACHE = {
+    'ids': None,
+    'ts': 0.0,
+    'ttl': 60.0
+}
+
+URL_PATTERN = re.compile(r'^(https?://[^\s/$.?#].[^\s]*$|t\.me/[^\s]+)$')
+CARD_PATTERN = re.compile(r'^\d{4}\s\d{4}\s\d{4}\s\d{4}\n[A-Za-zА-Яа-я\s]+$')
+CRYPTO_PATTERN = re.compile(r'^[A-Za-z0-9]+[A-Za-z0-9\-_/]*$')
+EWALLET_PATTERN = re.compile(r'^\+?\d+$')
 
 def get_admin_ids():
     try:
+        now = time.time()
+        if _ADMIN_IDS_CACHE['ids'] is not None and (now - _ADMIN_IDS_CACHE['ts'] < _ADMIN_IDS_CACHE['ttl']):
+            return _ADMIN_IDS_CACHE['ids']
         admin_ref = db.collection('admin_ids').document('init').get()
         admin_ids = admin_ref.to_dict().get('ids', []) if admin_ref.exists else []
+        _ADMIN_IDS_CACHE['ids'] = admin_ids
+        _ADMIN_IDS_CACHE['ts'] = now
         logger.info(f"Fetched admin_ids: {admin_ids}")
         return admin_ids
     except Exception as e:
@@ -52,6 +67,7 @@ def get_admin_ids():
         return []
 
 bot = telebot.async_telebot.AsyncTeleBot(API_TOKEN, state_storage=StateMemoryStorage())
+bot.add_custom_filter(StateFilter(bot))
 
 class UserStates(StatesGroup):
     AwaitingDealType = State()
@@ -68,9 +84,8 @@ def generate_deal_id(length=8):
 def validate_links(deal_type, text):
     if deal_type in ['gift', 'channel', 'nft']:
         lines = text.strip().split('\n')
-        url_pattern = re.compile(r'^(https?://[^\s/$.?#].[^\s]*$|t\.me/[^\s]+)$')
         for line in lines:
-            if not line.strip() or not url_pattern.match(line.strip()):
+            if not line.strip() or not URL_PATTERN.match(line.strip()):
                 return False, "⚠ Каждая ссылка должна начинаться с https:// или t.me/ и быть корректной."
         return True, ""
     elif deal_type == 'stars':
@@ -83,13 +98,13 @@ def validate_links(deal_type, text):
             return False, "⚠ Введите корректное число для количества Stars."
     return True, ""
 
-def get_main_menu_keyboard():
+def get_main_menu_keyboard(lang='ru'):
     keyboard = telebot.types.InlineKeyboardMarkup(row_width=2)
-    create_deal_btn = telebot.types.InlineKeyboardButton(text="🌟 Создать сделку", callback_data="create_deal")
-    profile_btn = telebot.types.InlineKeyboardButton(text="👤 Мой профиль", callback_data="my_profile")
-    details_btn = telebot.types.InlineKeyboardButton(text="💳 Мои реквизиты", callback_data="my_details")
-    support_btn = telebot.types.InlineKeyboardButton(text="📞 Поддержка", callback_data="support")
-    language_btn = telebot.types.InlineKeyboardButton(text="🌐 Сменить язык", callback_data="change_language")
+    create_deal_btn = telebot.types.InlineKeyboardButton(text=t(lang, 'btn_create_deal'), callback_data="create_deal")
+    profile_btn = telebot.types.InlineKeyboardButton(text=t(lang, 'btn_profile'), callback_data="my_profile")
+    details_btn = telebot.types.InlineKeyboardButton(text=t(lang, 'btn_details'), callback_data="my_details")
+    support_btn = telebot.types.InlineKeyboardButton(text=t(lang, 'btn_support'), callback_data="support")
+    language_btn = telebot.types.InlineKeyboardButton(text=t(lang, 'btn_language'), callback_data="change_language")
     keyboard.add(create_deal_btn, profile_btn, details_btn, support_btn, language_btn)
     return keyboard
 
@@ -103,20 +118,20 @@ def get_deal_type_keyboard():
     keyboard.add(gift_btn, channel_btn, stars_btn, nft_btn, back_btn)
     return keyboard
 
-def get_notice_keyboard(deal_type):
+def get_notice_keyboard(deal_type, lang='ru'):
     keyboard = telebot.types.InlineKeyboardMarkup(row_width=1)
-    read_btn = telebot.types.InlineKeyboardButton(text="✅ Я прочитал(а)", callback_data=f"notice_read_{deal_type}")
-    back_btn = telebot.types.InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")
+    read_btn = telebot.types.InlineKeyboardButton(text="✅ OK", callback_data=f"notice_read_{deal_type}")
+    back_btn = telebot.types.InlineKeyboardButton(text=t(lang, 'btn_back'), callback_data="main_menu")
     keyboard.add(read_btn, back_btn)
     return keyboard
 
-def get_links_keyboard(deal_type):
+def get_links_keyboard(deal_type, lang='ru'):
     keyboard = telebot.types.InlineKeyboardMarkup(row_width=1)
-    back_btn = telebot.types.InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")
+    back_btn = telebot.types.InlineKeyboardButton(text=t(lang, 'btn_back'), callback_data="main_menu")
     keyboard.add(back_btn)
     return keyboard
 
-def get_currency_keyboard():
+def get_currency_keyboard(lang='ru'):
     keyboard = telebot.types.InlineKeyboardMarkup(row_width=4)
     buttons = [
         telebot.types.InlineKeyboardButton("🇷🇺 RUB", callback_data="currency_RUB"),
@@ -133,18 +148,18 @@ def get_currency_keyboard():
         telebot.types.InlineKeyboardButton("💎 TON", callback_data="currency_TON"),
         telebot.types.InlineKeyboardButton("⭐ Stars", callback_data="currency_Stars")
     )
-    keyboard.add(telebot.types.InlineKeyboardButton("🚫 Отменить", callback_data="main_menu"))
+    keyboard.add(telebot.types.InlineKeyboardButton(t(lang, 'btn_cancel'), callback_data="main_menu"))
     return keyboard
 
-def get_cancel_keyboard():
+def get_cancel_keyboard(lang='ru'):
     keyboard = telebot.types.InlineKeyboardMarkup()
-    cancel_btn = telebot.types.InlineKeyboardButton(text="🚫 Отменить", callback_data="main_menu")
+    cancel_btn = telebot.types.InlineKeyboardButton(text=t(lang, 'btn_cancel'), callback_data="main_menu")
     keyboard.add(cancel_btn)
     return keyboard
 
-def get_add_details_keyboard():
+def get_add_details_keyboard(lang='ru'):
     keyboard = telebot.types.InlineKeyboardMarkup()
-    add_details_btn = telebot.types.InlineKeyboardButton(text="💳 Добавить реквизиты", callback_data="my_details")
+    add_details_btn = telebot.types.InlineKeyboardButton(text=t(lang, 'btn_add_details'), callback_data="my_details")
     keyboard.add(add_details_btn)
     return keyboard
 
@@ -177,26 +192,23 @@ def get_details_type_keyboard():
     keyboard.add(telebot.types.InlineKeyboardButton("🚫 Отменить", callback_data="main_menu"))
     return keyboard
 
-def get_profile_keyboard():
+def get_profile_keyboard(lang='ru'):
     keyboard = telebot.types.InlineKeyboardMarkup(row_width=1)
-    back_btn = telebot.types.InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")
+    back_btn = telebot.types.InlineKeyboardButton(text=t(lang, 'btn_back'), callback_data="main_menu")
     keyboard.add(back_btn)
     return keyboard
 
-def get_language_keyboard():
+def get_language_keyboard(lang='ru'):
     keyboard = telebot.types.InlineKeyboardMarkup(row_width=2)
     rus_btn = telebot.types.InlineKeyboardButton(text="🇷🇺 Русский", callback_data="lang_ru")
     eng_btn = telebot.types.InlineKeyboardButton(text="🇬🇧 English", callback_data="lang_en")
-    back_btn = telebot.types.InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")
+    back_btn = telebot.types.InlineKeyboardButton(text=t(lang, 'btn_back'), callback_data="main_menu")
     keyboard.add(rus_btn, eng_btn)
     keyboard.add(back_btn)
     return keyboard
 
 def get_in_deal_keyboard(deal_id, status='in_progress'):
     keyboard = telebot.types.InlineKeyboardMarkup()
-    if status != 'paid':
-        leave_btn = telebot.types.InlineKeyboardButton(text="🚫 Покинуть сделку", callback_data=f"leave_deal_{deal_id}")
-        keyboard.add(leave_btn)
     return keyboard
 
 def get_paid_keyboard(deal_id):
@@ -207,10 +219,9 @@ def get_payment_keyboard(deal_id, amount, currency, user_id):
     keyboard = telebot.types.InlineKeyboardMarkup()
     admin_ids = get_admin_ids()
     if user_id in admin_ids:
-        pay_btn = telebot.types.InlineKeyboardButton(text=f"💸 Оплатить ({amount} {currency})", callback_data=f"pay_from_balance_{deal_id}")
+        lang = get_user_language(user_id)
+        pay_btn = telebot.types.InlineKeyboardButton(text=t(lang, 'pay_btn', amount=amount, currency=currency), callback_data=f"pay_from_balance_{deal_id}")
         keyboard.add(pay_btn)
-    if user_id not in admin_ids:
-        keyboard.add(telebot.types.InlineKeyboardButton(text="🚫 Покинуть сделку", callback_data=f"leave_deal_{deal_id}"))
     return keyboard
 
 def get_support_keyboard():
@@ -242,9 +253,16 @@ def check_user_details(user_id):
 def get_user_details(user_id):
     try:
         details_doc = db.collection('user_details').document(str(user_id)).get()
-        details = details_doc.to_dict().get('details') if details_doc.exists else "Реквизиты не указаны 😕"
-        logger.info(f"Fetched details for user {user_id}: {details}")
-        return details
+        if not details_doc.exists:
+            return "Реквизиты не указаны 😕"
+        data = details_doc.to_dict() or {}
+        if isinstance(data.get('details'), str):
+            return data.get('details')
+        details_type = data.get('type')
+        value = data.get('value')
+        if details_type and value:
+            return f"{details_type}: {value}"
+        return "Реквизиты не указаны 😕"
     except Exception as e:
         logger.error(f"Error fetching user details for {user_id}: {e}")
         return "Ошибка при получении реквизитов 😕"
@@ -345,6 +363,96 @@ def get_deal_type_display(deal_type):
     }
     return type_names.get(deal_type, deal_type)
 
+def get_deal_type_display_en(deal_type):
+    type_names = {
+        'gift': 'Gift',
+        'channel': 'Channel/Chat',
+        'stars': 'Stars',
+        'nft': 'NFT Username/+888'
+    }
+    return type_names.get(deal_type, deal_type)
+
+def get_user_language(user_id):
+    try:
+        profile_doc = db.collection('user_profile').document(str(user_id)).get()
+        profile = profile_doc.to_dict() or {}
+        return profile.get('language', 'ru')
+    except Exception:
+        return 'ru'
+
+def t(lang, key, **kwargs):
+    ru = {
+        'menu_title': "Secure Deal - Safe & Automatic\nВаш надежный партнер в безопасных сделках!\n\nПочему клиенты выбирают нас:\n\nГарантия безопасности - все сделки защищены\nМгновенные выплаты - в любой валюте\nКруглосуточная поддержка - решаем любые вопросы\nПростота использования - интуитивно понятный интерфейс",
+        'btn_create_deal': "🌟 Создать сделку",
+        'btn_profile': "👤 Мой профиль",
+        'btn_details': "💳 Мои реквизиты",
+        'btn_support': "📞 Поддержка",
+        'btn_language': "🌐 Сменить язык",
+        'btn_back': "🔙 Назад",
+        'btn_cancel': "🚫 Отменить",
+        'btn_add_details': "💳 Добавить реквизиты",
+        'details_menu_title': "💳 Управление реквизитами\n\nВыберите действие:",
+        'details_type_title': "💳 Тип реквизитов\n\nВыберите способ вывода средств:",
+        'notice_title': "⚠ Обязательно к прочтению!\n\n",
+        'notice_default': "⚠ Обязательно к прочтению!\n\nПожалуйста, ознакомьтесь с информацией ниже, чтобы избежать проблем.",
+        'links_prompt_gift': "🎁 Введите ссылку(-и) на подарок(-и) в одном из форматов:\nhttps://... или t.me/...\nНапример:\nt.me/nft/PlushPepe-1\n\nЕсли у вас несколько подарков, указывайте каждую ссылку с новой строки",
+        'links_prompt_channel': "📢 Введите ссылку(-и) на канал(-ы) / чат(-ы) в формате t.me/...\nНапример:\nt.me/MyChannel\n\nЕсли их несколько, указывайте каждую с новой строки.",
+        'links_prompt_stars': "⭐ Введите количество Stars для сделки (целое положительное число).\nНапример: 100",
+        'links_prompt_nft': "🔹 Введите ссылку(-и) на NFT Username/+888 в одном из форматов:\nhttps://... или t.me/...\nНапример:\nt.me/nft/PlushPepe-1\n\nЕсли у вас несколько NFT, указывайте каждую ссылку с новой строки",
+        'currency_prompt': "💱 Выбор валюты\n\nУкажите валюту для сделки:",
+        'amount_prompt': "💱 Валюта выбрана\n\nСумма сделки в {currency}:\n\nВведите сумму цифрами (напр. 1000)",
+        'details_input_card': "💳 Отправьте реквизиты единым сообщением:\n\nНомер банковской карты\nФИО владельца\n\nПример:\n1234 5678 9101 1121\nИванов Иван Иванович",
+        'details_input_crypto': "💎 Введите адрес вашего криптовалютного кошелька ({curr}). Например: 0x123...abc",
+        'details_input_ewallet': "💳 Введите номер вашего электронного кошелька ({curr}). Например: Qiwi +7912...",
+        'details_saved': "✅ Ваши реквизиты успешно сохранены!",
+        'profile_title': "👤 Ваш профиль\n\nПользователь: {username}\n🆔 ID пользователя: {uid}\n💰 Баланс: {balance}\n🏆 Успешных сделок: {deals}\n\nСмело создавайте или присоединяйтесь к новым сделкам с Secure Deal! 🚀",
+        'support_text': "📞 Мы всегда на связи!\n\nСвяжитесь с нашей службой поддержки для решения любых вопросов.",
+        'lang_change_title_ru': "🌐 Сменить язык\n\nВыберите предпочитаемый язык\n\nТекущий язык: Русский 🇷🇺",
+        'lang_change_title_en': "🌐 Change language\n\nChoose your preferred language\n\nCurrent: English 🇬🇧",
+        'alert_need_details': "⚠ Для создания сделки необходимо добавить реквизиты.",
+        'confirm_lang_ru': "Язык: Русский 🇷🇺",
+        'confirm_lang_en': "Language: English 🇬🇧",
+        'leave_deal_btn': "🚫 Покинуть сделку",
+        'pay_btn': "💸 Оплатить ({amount} {currency})"
+    }
+    en = {
+        'menu_title': "Secure Deal - Safe & Automatic\nYour trusted partner for safe deals!\n\nWhy choose us:\n\nSecurity guaranteed\nInstant payouts\n24/7 support\nEasy to use",
+        'btn_create_deal': "🌟 Create deal",
+        'btn_profile': "👤 My profile",
+        'btn_details': "💳 My details",
+        'btn_support': "📞 Support",
+        'btn_language': "🌐 Change language",
+        'btn_back': "🔙 Back",
+        'btn_cancel': "🚫 Cancel",
+        'btn_add_details': "💳 Add details",
+        'details_menu_title': "💳 Details management\n\nChoose an action:",
+        'details_type_title': "💳 Details type\n\nChoose withdrawal method:",
+        'notice_title': "⚠ Must read!\n\n",
+        'notice_default': "⚠ Must read!\n\nPlease read the info below to avoid issues.",
+        'links_prompt_gift': "🎁 Send link(s) to gift(s) in format:\nhttps://... or t.me/...\nExample:\nt.me/nft/PlushPepe-1\n\nFor multiple items, put each on a new line",
+        'links_prompt_channel': "📢 Send link(s) to channel(s)/chat(s) in t.me/... format\nExample:\nt.me/MyChannel\n\nFor multiple, one per line.",
+        'links_prompt_stars': "⭐ Enter Stars amount (positive integer).\nExample: 100",
+        'links_prompt_nft': "🔹 Send link(s) to NFT Username/+888 in:\nhttps://... or t.me/...\nExample:\nt.me/nft/PlushPepe-1\n\nFor multiple items, one per line",
+        'currency_prompt': "💱 Choose currency\n\nSelect the currency:",
+        'amount_prompt': "💱 Currency selected\n\nAmount in {currency}:\n\nEnter a number (e.g. 1000)",
+        'details_input_card': "💳 Send your details in one message:\n\nCard number\nFull name\n\nExample:\n1234 5678 9101 1121\nIvan Ivanov",
+        'details_input_crypto': "💎 Enter your wallet address ({curr}). Example: 0x123...abc",
+        'details_input_ewallet': "💳 Enter your e-wallet number ({curr}). Example: Qiwi +7912...",
+        'details_saved': "✅ Your details were saved successfully!",
+        'profile_title': "👤 Your profile\n\nUser: {username}\n🆔 User ID: {uid}\n💰 Balance: {balance}\n🏆 Successful deals: {deals}\n\nCreate or join new deals with Secure Deal! 🚀",
+        'support_text': "📞 We are always online!\n\nContact support for any questions.",
+        'lang_change_title_ru': "🌐 Change language\n\nChoose your preferred language\n\nCurrent: Russian 🇷🇺",
+        'lang_change_title_en': "🌐 Change language\n\nChoose your preferred language\n\nCurrent: English 🇬🇧",
+        'alert_need_details': "⚠ You need to add payout details to create a deal.",
+        'confirm_lang_ru': "Language: Russian 🇷🇺",
+        'confirm_lang_en': "Language: English 🇬🇧",
+        'leave_deal_btn': "🚫 Leave deal",
+        'pay_btn': "💸 Pay ({amount} {currency})"
+    }
+    d = en if lang == 'en' else ru
+    s = d.get(key, '')
+    return s.format(**kwargs)
+
 def is_banned_from_admin(user_id):
     try:
         profile_doc = db.collection('user_profile').document(str(user_id)).get()
@@ -385,33 +493,61 @@ async def complete_deal_join(chat_id, user_id, user_username, deal_id):
             
             creator_details = get_user_details(creator_id)
             creator_rating = get_user_rating(creator_id)
-            
+            buyer_rating = get_user_rating(user_id)
             participant_display_name = f"@{user_username}" if user_username else f"ID{user_id}"
-            
-            deal_info_text = (
-                f"ℹ Информация о сделке\n"
-                f"#{deal_id}\n\n"
-                f"👤 Продавец: <a href='tg://user?id={creator_id}'>{creator_username or 'Пользователь'}</a>\n"
-                f"🏆 Рейтинг: {creator_rating} сделок\n\n"
-                f"{get_deal_type_display(deal_type)}:\n"
-                f"{item_links or 'Не указано'}\n\n"
-                f"💳 Данные для оплаты:\n"
-                f"Реквизиты: {creator_details}\n"
-                f"💰 Сумма: {amount} {currency}\n"
-                f"💎 TON: {amount * 0.00375:.2f} TON\n"
-                f"📝 Комментарий: {deal_id}\n\n"
-                f"⚠ Внимание! Убедитесь в правильности данных перед оплатой."
-            )
+            lang = get_user_language(chat_id)
+            if lang == 'en':
+                deal_info_text = (
+                    f"ℹ Deal info\n"
+                    f"#{deal_id}\n\n"
+                    f"👤 Buyer: <a href='tg://user?id={user_id}'>{participant_display_name}</a>\n"
+                    f"🏆 Buyer rating: {buyer_rating}\n\n"
+                    f"👤 Seller: <a href='tg://user?id={creator_id}'>{creator_username or 'User'}</a>\n"
+                    f"🏆 Seller rating: {creator_rating}\n\n"
+                    f"{get_deal_type_display_en(deal_type)}:\n"
+                    f"{item_links or 'Not specified'}\n\n"
+                    f"💳 Payment details:\n"
+                    f"Details: {creator_details}\n"
+                    f"💰 Amount: {amount} {currency}\n"
+                    f"💎 TON: {amount * 0.00375:.2f} TON\n"
+                    f"📝 Comment: {deal_id}\n\n"
+                    f"⚠ Make sure details are correct before paying."
+                )
+            else:
+                deal_info_text = (
+                    f"ℹ Информация о сделке\n"
+                    f"#{deal_id}\n\n"
+                    f"👤 Покупатель: <a href='tg://user?id={user_id}'>{participant_display_name}</a>\n"
+                    f"🏆 Рейтинг покупателя: {buyer_rating}\n\n"
+                    f"👤 Продавец: <a href='tg://user?id={creator_id}'>{creator_username or 'Пользователь'}</a>\n"
+                    f"🏆 Рейтинг продавца: {creator_rating}\n\n"
+                    f"{get_deal_type_display(deal_type)}:\n"
+                    f"{item_links or 'Не указано'}\n\n"
+                    f"💳 Данные для оплаты:\n"
+                    f"Реквизиты: {creator_details}\n"
+                    f"💰 Сумма: {amount} {currency}\n"
+                    f"💎 TON: {amount * 0.00375:.2f} TON\n"
+                    f"📝 Комментарий: {deal_id}\n\n"
+                    f"⚠ Внимание! Убедитесь в правильности данных перед оплатой."
+                )
             
             await bot.send_message(chat_id, deal_info_text, parse_mode='HTML', reply_markup=get_payment_keyboard(deal_id, amount, currency, user_id))
             
             participant_link = f"<a href='tg://user?id={user_id}'>{participant_display_name}</a>"
-            seller_notification = (
-                f"🔔 Новый участник сделки {participant_link}\n\n"
-                f"🏆 Успешных сделок: {get_user_rating(user_id)}\n\n"
-                f"🔍 Проверьте, что это тот же пользователь!\n\n"
-                f"📩 После оплаты вы получите дальнейшие инструкции."
-            )
+            if lang == 'en':
+                seller_notification = (
+                    f"🔔 New participant {participant_link}\n\n"
+                    f"🏆 Completed deals: {get_user_rating(user_id)}\n\n"
+                    f"🔍 Check it is the same user.\n\n"
+                    f"📩 You will get further instructions after payment."
+                )
+            else:
+                seller_notification = (
+                    f"🔔 Новый участник сделки {participant_link}\n\n"
+                    f"🏆 Успешных сделок: {get_user_rating(user_id)}\n\n"
+                    f"🔍 Проверьте, что это тот же пользователь!\n\n"
+                    f"📩 После оплаты вы получите дальнейшие инструкции."
+                )
             await bot.send_message(creator_id, seller_notification, parse_mode='HTML', reply_markup=get_in_deal_keyboard(deal_id, 'in_progress'))
         else:
             logger.error(f"Deal {deal_id} not found for join")
@@ -642,17 +778,29 @@ async def handle_join_deal(message, deal_id):
 async def show_main_menu(chat_id, user_name):
     try:
         await bot.delete_state(chat_id, chat_id)
-        menu_text = (
-            f"Secure Deal - Safe & Automatic\n"
-            f"Ваш надежный партнер в безопасных сделках!\n\n"
-            f"Почему клиенты выбирают нас:\n\n"
-            f"Гарантия безопасности - все сделки защищены\n"
-            f"Мгновенные выплаты - в любой валюте\n"
-            f"Круглосуточная поддержка - решаем любые вопросы\n"
-            f"Простота использования - интуитивно понятный интерфейс"
-        )
-        with open('assets/start_menu_photo.jpg', 'rb') as photo:
-            await bot.send_photo(chat_id, photo, caption=menu_text, reply_markup=get_main_menu_keyboard(), parse_mode='HTML')
+        lang = get_user_language(chat_id)
+        if lang == 'en':
+            menu_text = (
+                f"Secure Deal - Safe & Automatic\n"
+                f"Your trusted partner for safe deals!\n\n"
+                f"Why choose us:\n\n"
+                f"Security guaranteed\n"
+                f"Instant payouts\n"
+                f"24/7 support\n"
+                f"Easy to use"
+            )
+        else:
+            menu_text = (
+                f"Secure Deal - Safe & Automatic\n"
+                f"Ваш надежный партнер в безопасных сделках!\n\n"
+                f"Почему клиенты выбирают нас:\n\n"
+                f"Гарантия безопасности - все сделки защищены\n"
+                f"Мгновенные выплаты - в любой валюте\n"
+                f"Круглосуточная поддержка - решаем любые вопросы\n"
+                f"Простота использования - интуитивно понятный интерфейс"
+            )
+        with open('assets/photo.jpg', 'rb') as photo:
+            await bot.send_photo(chat_id, photo, caption=menu_text, reply_markup=get_main_menu_keyboard(lang), parse_mode='HTML')
         logger.info(f"Displayed main menu for chat {chat_id}")
     except Exception as e:
         logger.error(f"Error in show_main_menu for chat {chat_id}: {e}")
@@ -697,7 +845,7 @@ async def handle_callback_query(call):
             except:
                 pass
             text = "🌟 Создание сделки\n\nВыберите тип сделки"
-            with open('assets/deal_photo.jpg', 'rb') as photo:
+            with open('assets/photo.jpg', 'rb') as photo:
                 await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_deal_type_keyboard())
         elif call.data.startswith("deal_type_"):
             deal_type = call.data.split('_')[-1]
@@ -711,43 +859,39 @@ async def handle_callback_query(call):
                 await bot.delete_message(chat_id, message_id)
             except:
                 pass
-            await bot.send_message(chat_id, text=notice_text, reply_markup=get_notice_keyboard(deal_type))
+            await bot.send_message(chat_id, text=notice_text, reply_markup=get_notice_keyboard(deal_type, get_user_language(chat_id)))
         elif call.data.startswith("notice_read_"):
             deal_type = call.data.split('_')[-1]
             await bot.set_state(call.from_user.id, UserStates.AwaitingLinks, chat_id)
             async with bot.retrieve_data(call.from_user.id, chat_id) as data:
                 data['deal_type'] = deal_type
-            link_text = {
-                'gift': "🎁 Введите ссылку(-и) на подарок(-и) в одном из форматов:\nhttps://... или t.me/...\nНапример:\nt.me/nft/PlushPepe-1\n\nЕсли у вас несколько подарков, указывайте каждую ссылку с новой строки",
-                'channel': "📢 Введите ссылку(-и) на канал(-ы) / чат(-ы) в формате t.me/...\nНапример:\nt.me/MyChannel\n\nЕсли их несколько, указывайте каждую с новой строки.",
-                'stars': "⭐ Введите количество Stars для сделки (целое положительное число).\nНапример: 100",
-                'nft': "🔹 Введите ссылку(-и) на NFT Username/+888 в одном из форматов:\nhttps://... или t.me/...\nНапример:\nt.me/nft/PlushPepe-1\n\nЕсли у вас несколько NFT, указывайте каждую ссылку с новой строки",
-            }.get(deal_type, "Введите ссылку(-и) на товар/услугу. Если их несколько, указывайте каждую с новой строки.")
+            lang_cur = get_user_language(chat_id)
+            link_text_map = {
+                'gift': t(lang_cur, 'links_prompt_gift'),
+                'channel': t(lang_cur, 'links_prompt_channel'),
+                'stars': t(lang_cur, 'links_prompt_stars'),
+                'nft': t(lang_cur, 'links_prompt_nft')
+            }
+            link_text = link_text_map.get(deal_type, t(lang_cur, 'links_prompt_gift'))
             try:
                 await bot.delete_message(chat_id, message_id)
             except:
                 pass
-            sent_msg = await bot.send_message(chat_id, text=link_text, reply_markup=get_links_keyboard(deal_type))
+            sent_msg = await bot.send_message(chat_id, text=link_text, reply_markup=get_links_keyboard(deal_type, get_user_language(chat_id)))
             async with bot.retrieve_data(call.from_user.id, chat_id) as data:
                 data['prompt_message_id'] = sent_msg.message_id
         elif call.data.startswith("currency_"):
             async with bot.retrieve_data(call.from_user.id, chat_id) as data:
-                if bot.get_state(call.from_user.id, chat_id) != UserStates.AwaitingCurrency:
-                    return
                 currency = call.data.split('_')[-1]
                 data['deal_data']['currency'] = currency
             await bot.set_state(call.from_user.id, UserStates.AwaitingAmount, chat_id)
-            text = (
-                f"💱 Валюта выбрана\n\n"
-                f"Сумма сделки в {currency}:\n\n"
-                f"Введите сумму цифрами (напр. 1000)"
-            )
+            text = t(get_user_language(chat_id), 'amount_prompt', currency=currency)
             try:
                 await bot.delete_message(chat_id, message_id)
             except:
                 pass
-            with open('assets/deal_photo.jpg', 'rb') as photo:
-                sent_msg = await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_cancel_keyboard())
+            with open('assets/photo.jpg', 'rb') as photo:
+                sent_msg = await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_cancel_keyboard(get_user_language(chat_id)))
             async with bot.retrieve_data(call.from_user.id, chat_id) as data:
                 data['prompt_message_id'] = sent_msg.message_id
         elif call.data == "my_details":
@@ -755,16 +899,16 @@ async def handle_callback_query(call):
                 await bot.delete_message(chat_id, message_id)
             except:
                 pass
-            with open('assets/details_photo.jpg', 'rb') as photo:
-                await bot.send_photo(chat_id, photo, caption="💳 Управление реквизитами\n\nВыберите действие:", reply_markup=get_details_menu_keyboard())
+            with open('assets/photo.jpg', 'rb') as photo:
+                await bot.send_photo(chat_id, photo, caption=t(get_user_language(chat_id), 'details_menu_title'), reply_markup=get_details_menu_keyboard(get_user_language(chat_id)))
         elif call.data == "add_details":
             await bot.set_state(call.from_user.id, UserStates.AwaitingDetailsType, chat_id)
             try:
                 await bot.delete_message(chat_id, message_id)
             except:
                 pass
-            with open('assets/details_photo.jpg', 'rb') as photo:
-                await bot.send_photo(chat_id, photo, caption="💳 Тип реквизитов\n\nВыберите способ вывода средств:", reply_markup=get_details_type_keyboard())
+            with open('assets/photo.jpg', 'rb') as photo:
+                await bot.send_photo(chat_id, photo, caption=t(get_user_language(chat_id), 'details_type_title'), reply_markup=get_details_type_keyboard())
         elif call.data.startswith("details_type_"):
             async with bot.retrieve_data(call.from_user.id, chat_id) as data:
                 details_type = call.data.split('_')[2]
@@ -772,11 +916,12 @@ async def handle_callback_query(call):
                 data['details_type'] = f"{details_type}_{details_currency}"
                 logger.info(f"Set details_type for user {call.from_user.id}: {details_type}_{details_currency}")
             await bot.set_state(call.from_user.id, UserStates.AwaitingDetailsInput, chat_id)
-            input_prompt = "💳 Отправьте реквизиты единым сообщением:\n\nНомер банковской карты\nФИО владельца\n\nПример:\n1234 5678 9101 1121\nИванов Иван Иванович"
+            lang_cur = get_user_language(chat_id)
+            input_prompt = t(lang_cur, 'details_input_card')
             if details_type == 'crypto':
-                input_prompt = f"💎 Введите адрес вашего криптовалютного кошелька ({details_currency}). Например: 0x123...abc"
+                input_prompt = t(lang_cur, 'details_input_crypto', curr=details_currency)
             elif details_type == 'ewallet':
-                input_prompt = f"💳 Введите номер вашего электронного кошелька ({details_currency}). Например: Qiwi +7912..."
+                input_prompt = t(lang_cur, 'details_input_ewallet', curr=details_currency)
             try:
                 await bot.delete_message(chat_id, message_id)
             except:
@@ -826,8 +971,8 @@ async def handle_callback_query(call):
                     await bot.delete_message(chat_id, message_id)
                 except:
                     pass
-                with open('assets/profile_photo.jpg', 'rb') as photo:
-                    await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_profile_keyboard())
+                with open('assets/photo.jpg', 'rb') as photo:
+                    await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_profile_keyboard(get_user_language(chat_id)))
             except Exception as e:
                 logger.error(f"Error in my_profile for user {call.from_user.id}: {e}")
                 await bot.send_message(chat_id, "⚠ Ошибка при отображении профиля. Обратитесь в поддержку @SecureHomeSupport.")
@@ -836,13 +981,35 @@ async def handle_callback_query(call):
                 await bot.delete_message(chat_id, message_id)
             except:
                 pass
-            text = (
-                "🌐 Сменить язык\n\n"
-                "Выберите предпочитаемый язык\n\n"
-                "Текущий язык: Русский 🇷🇺"
-            )
-            with open('assets/language_photo.jpg', 'rb') as photo:
-                await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_language_keyboard())
+            current_lang = get_user_language(call.from_user.id)
+            if current_lang == 'en':
+                text = (
+                    "🌐 Change language\n\n"
+                    "Choose your preferred language\n\n"
+                    "Current: English 🇬🇧"
+                )
+            else:
+                text = (
+                    "🌐 Сменить язык\n\n"
+                    "Выберите предпочитаемый язык\n\n"
+                    "Текущий язык: Русский 🇷🇺"
+                )
+            with open('assets/photo.jpg', 'rb') as photo:
+                await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_language_keyboard(get_user_language(chat_id)))
+        elif call.data == "lang_ru":
+            try:
+                db.collection('user_profile').document(str(call.from_user.id)).update({'language': 'ru'})
+            except Exception:
+                pass
+            await bot.answer_callback_query(call.id, "Язык: Русский 🇷🇺", show_alert=False)
+            await show_main_menu(chat_id, call.from_user.first_name)
+        elif call.data == "lang_en":
+            try:
+                db.collection('user_profile').document(str(call.from_user.id)).update({'language': 'en'})
+            except Exception:
+                pass
+            await bot.answer_callback_query(call.id, "Language: English 🇬🇧", show_alert=False)
+            await show_main_menu(chat_id, call.from_user.first_name)
         elif call.data == "support":
             try:
                 await bot.delete_message(chat_id, message_id)
@@ -975,7 +1142,7 @@ async def handle_complete_deal(chat_id, user_id, deal_id, message_id):
         logger.info(f"Deal {deal_id} completed")
 
         creator_link = f"<a href='tg://user?id={creator_id}'>@{creator_username or 'ID' + str(creator_id)}</a>"
-        participant_link = f"<a href='tg://user?id={Participant_id}'>@{participant_username or 'ID' + str(participant_id)}</a>"
+        participant_link = f"<a href='tg://user?id={participant_id}'>@{participant_username or 'ID' + str(participant_id)}</a>"
         deal_notification = (
             f"🎉 Сделка завершена!\n\n"
             f"🆔 ID сделки: {deal_id}\n"
@@ -1043,7 +1210,7 @@ async def handle_leave_deal(chat_id, user_id, deal_id):
         logger.error(f"Error in handle_leave_deal for deal {deal_id}: {e}")
         await bot.send_message(chat_id, "⚠ Ошибка при выходе из сделки. Обратитесь в поддержку @SecureHomeSupport.")
 
-@bot.message_handler(state=UserStates.AwaitingLinks)
+@bot.message_handler(state=UserStates.AwaitingLinks, content_types=['text'])
 async def handle_links(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
@@ -1070,14 +1237,14 @@ async def handle_links(message):
             await bot.delete_message(chat_id, message.message_id)
         except Exception as e:
             logger.error(f"Error deleting messages in handle_links for user {user_id}: {e}")
-        text = "💱 Выбор валюты\n\nУкажите валюту для сделки:"
-        with open('assets/deal_photo.jpg', 'rb') as photo:
-            await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_currency_keyboard())
+        text = t(get_user_language(chat_id), 'currency_prompt')
+        with open('assets/photo.jpg', 'rb') as photo:
+            await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_currency_keyboard(get_user_language(chat_id)))
     except Exception as e:
         logger.error(f"Error in handle_links for user {user_id}: {e}")
         await bot.send_message(chat_id, "⚠ Ошибка при обработке ссылок. Обратитесь в поддержку @SecureHomeSupport.")
 
-@bot.message_handler(state=UserStates.AwaitingAmount)
+@bot.message_handler(state=UserStates.AwaitingAmount, content_types=['text'])
 async def handle_amount(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
@@ -1130,14 +1297,14 @@ async def handle_amount(message):
             f"🔗 Ссылка для участника:\n{join_link}\n\n"
             f"📦 После создания сделки передайте товар/подарок поддержке @SecureHomeSupport для проверки."
         )
-        with open('assets/deal_photo.jpg', 'rb') as photo:
+        with open('assets/photo.jpg', 'rb') as photo:
             await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_in_deal_keyboard(deal_id, 'waiting_for_participant'))
         await bot.delete_state(user_id, chat_id)
     except Exception as e:
         logger.error(f"Error in handle_amount for user {user_id}: {e}")
         await bot.send_message(chat_id, "⚠ Ошибка при создании сделки. Обратитесь в поддержку @SecureHomeSupport.")
 
-@bot.message_handler(state=UserStates.AwaitingDetailsInput)
+@bot.message_handler(state=UserStates.AwaitingDetailsInput, content_types=['text'])
 async def handle_details_input(message):
     chat_id = message.chat.id
     user_id = message.from_user.id
@@ -1151,21 +1318,10 @@ async def handle_details_input(message):
         logger.info(f"State data for user {user_id}: details_type={details_type}, prompt_message_id={prompt_message_id}, pending_deal_id={pending_deal_id}")
 
     # Валидация формата реквизитов
-    if details_type.startswith('card_'):
-        card_pattern = re.compile(r'^\d{4}\s\d{4}\s\d{4}\s\d{4}\n[A-Za-zА-Яа-я\s]+$')
-        if not card_pattern.match(message.text):
-            await bot.send_message(chat_id, "⚠ Неверный формат. Пример: 1234 5678 9101 1121\nИванов Иван Иванович")
-            return
-    elif details_type.startswith('crypto_'):
-        crypto_pattern = re.compile(r'^[A-Za-z0-9]+[A-Za-z0-9\-_/]*$')
-        if not crypto_pattern.match(message.text):
-            await bot.send_message(chat_id, "⚠ Неверный формат криптокошелька. Пример: 0x123...abc")
-            return
-    elif details_type.startswith('ewallet_'):
-        ewallet_pattern = re.compile(r'^\+?\d+$')
-        if not ewallet_pattern.match(message.text):
-            await bot.send_message(chat_id, "⚠ Неверный формат электронного кошелька. Пример: +79123456789")
-            return
+    text_value = (message.text or '').strip()
+    if not text_value:
+        await bot.send_message(chat_id, "⚠ Введите реквизиты текстом.")
+        return
 
     # Удаление сообщений
     try:
@@ -1178,10 +1334,21 @@ async def handle_details_input(message):
         logger.error(f"Error deleting messages for user {user_id}: {e}")
 
     # Сохранение реквизитов в Firestore
-    details = f"{details_type}: {message.text}"
     try:
-        db.collection('user_details').document(str(user_id)).set({'details': details}, merge=True)
-        logger.info(f"Saved details for user {user_id}: {details}")
+        details_currency = None
+        if '_' in details_type:
+            parts = details_type.split('_', 1)
+            if len(parts) == 2:
+                details_currency = parts[1]
+        payload = {
+            'type': details_type,
+            'value': text_value,
+            'updated_at': firestore.SERVER_TIMESTAMP
+        }
+        if details_currency:
+            payload['currency'] = details_currency
+        db.collection('user_details').document(str(user_id)).set(payload, merge=True)
+        logger.info(f"Saved details for user {user_id}")
     except Exception as e:
         logger.error(f"Error saving details to Firestore for user {user_id}: {e}")
         await bot.send_message(chat_id, "⚠ Ошибка при сохранении реквизитов. Пожалуйста, попробуйте снова или обратитесь в поддержку @SecureHomeSupport.")
@@ -1189,7 +1356,7 @@ async def handle_details_input(message):
 
     # Отправка подтверждения
     try:
-        await bot.send_message(chat_id, "✅ Ваши реквизиты успешно сохранены!", reply_markup=get_main_menu_keyboard())
+        await bot.send_message(chat_id, "✅ Ваши реквизиты успешно сохранены!")
         logger.info(f"Sent confirmation to user {user_id}")
     except Exception as e:
         logger.error(f"Error sending confirmation message to user {user_id}: {e}")
