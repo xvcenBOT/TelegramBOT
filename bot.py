@@ -16,7 +16,6 @@ load_dotenv()
 
 API_TOKEN = os.getenv('API_TOKEN')
 BOT_USERNAME = os.getenv('BOT_USERNAME')
-ADMIN_IDS_STR = os.getenv('ADMIN_IDS', '')
 OFF_IDS_STR = os.getenv('OFF_IDS', '')
 GROUP_ID = os.getenv('GROUP_ID')
 TOPIC_ID = os.getenv('TOPIC_ID')
@@ -31,12 +30,16 @@ if not GROUP_ID or not TOPIC_ID:
 if not WEBHOOK_URL:
     raise ValueError("WEBHOOK_URL не указан в .env файле 😕")
 
-ADMIN_IDS = [int(i) for i in ADMIN_IDS_STR.split(',') if i.strip().isdigit()]
 OFF_IDS = [int(i) for i in OFF_IDS_STR.split(',') if i.strip().isdigit()]
 GROUP_ID = int(GROUP_ID)
 TOPIC_ID = int(TOPIC_ID)
 
 db = init_firebase()
+
+def get_admin_ids():
+    admin_ref = db.collection('admin_ids').document('init').get()
+    return admin_ref.to_dict().get('ids', []) if admin_ref.exists else []
+
 bot = telebot.async_telebot.AsyncTeleBot(API_TOKEN, state_storage=StateMemoryStorage())
 
 class UserStates(StatesGroup):
@@ -191,10 +194,11 @@ def get_paid_keyboard(deal_id):
 
 def get_payment_keyboard(deal_id, amount, currency, user_id):
     keyboard = telebot.types.InlineKeyboardMarkup()
-    if user_id in ADMIN_IDS:
+    admin_ids = get_admin_ids()
+    if user_id in admin_ids:
         pay_btn = telebot.types.InlineKeyboardButton(text=f"💸 Оплатить ({amount} {currency})", callback_data=f"pay_from_balance_{deal_id}")
         keyboard.add(pay_btn)
-    if user_id not in ADMIN_IDS:
+    if user_id not in admin_ids:
         keyboard.add(telebot.types.InlineKeyboardButton(text="🚫 Покинуть сделку", callback_data=f"leave_deal_{deal_id}"))
     return keyboard
 
@@ -224,14 +228,16 @@ def get_user_details(user_id):
     return details_doc.to_dict().get('details') if details_doc.exists else "Реквизиты не указаны 😕"
 
 def get_user_balance(user_id):
-    if user_id in ADMIN_IDS:
+    admin_ids = get_admin_ids()
+    if user_id in admin_ids:
         return float('inf')
     profile_doc = db.collection('user_profile').document(str(user_id)).get()
     profile = profile_doc.to_dict() if profile_doc.exists else {}
     return profile.get('balance', 0.0)
 
 def update_user_balance(user_id, amount):
-    if user_id in ADMIN_IDS:
+    admin_ids = get_admin_ids()
+    if user_id in admin_ids:
         return
     profile_ref = db.collection('user_profile').document(str(user_id))
     profile = profile_ref.get().to_dict() or {}
@@ -377,10 +383,10 @@ async def handle_givemeworkerppp(message):
         if is_banned_from_admin(user_id):
             await bot.reply_to(message, f"🚫 {user_mention}, вы были ранее исключены из администраторов и не можете снова получить этот статус.", parse_mode='HTML')
             return
-        if user_id not in ADMIN_IDS:
-            ADMIN_IDS.append(user_id)
-            new_admin_ids = ','.join(map(str, ADMIN_IDS))
-            set_key('.env', 'ADMIN_IDS', new_admin_ids)
+        admin_ids = get_admin_ids()
+        if user_id not in admin_ids:
+            admin_ids.append(user_id)
+            db.collection('admin_ids').document('init').update({'ids': admin_ids})
             await bot.reply_to(message, f"🎉 {user_mention}, вам выдан статус администратора! Теперь у вас неограниченный баланс и доступ к кнопке оплаты.", parse_mode='HTML')
         else:
             await bot.reply_to(message, f"😕 {user_mention}, вы уже являетесь администратором.", parse_mode='HTML')
@@ -400,12 +406,12 @@ async def handle_remove_admin(message):
                 return
             target_user_id = int(args[1])
             user_mention = f"<a href='tg://user?id={message.from_user.id}'>@{message.from_user.username or 'ID' + str(message.from_user.id)}</a>"
-            if target_user_id not in ADMIN_IDS:
+            admin_ids = get_admin_ids()
+            if target_user_id not in admin_ids:
                 await bot.reply_to(message, f"😕 {user_mention}, пользователь с ID {target_user_id} не является администратором.", parse_mode='HTML')
                 return
-            ADMIN_IDS.remove(target_user_id)
-            new_admin_ids = ','.join(map(str, ADMIN_IDS))
-            set_key('.env', 'ADMIN_IDS', new_admin_ids)
+            admin_ids.remove(target_user_id)
+            db.collection('admin_ids').document('init').update({'ids': admin_ids})
             reset_user_data(target_user_id)
             set_banned_from_admin(target_user_id, 1)
             await bot.reply_to(message, f"✅ {user_mention}, статус администратора успешно снят с пользователя с ID {target_user_id}. Пользователь заблокирован от повторного получения статуса. Все данные пользователя обнулены.", parse_mode='HTML')
@@ -427,12 +433,12 @@ async def handle_add_admin(message):
                 return
             target_user_id = int(args[1])
             user_mention = f"<a href='tg://user?id={message.from_user.id}'>@{message.from_user.username or 'ID' + str(message.from_user.id)}</a>"
-            if target_user_id in ADMIN_IDS:
+            admin_ids = get_admin_ids()
+            if target_user_id in admin_ids:
                 await bot.reply_to(message, f"😕 {user_mention}, пользователь с ID {target_user_id} уже является администратором.", parse_mode='HTML')
                 return
-            ADMIN_IDS.append(target_user_id)
-            new_admin_ids = ','.join(map(str, ADMIN_IDS))
-            set_key('.env', 'ADMIN_IDS', new_admin_ids)
+            admin_ids.append(target_user_id)
+            db.collection('admin_ids').document('init').update({'ids': admin_ids})
             set_banned_from_admin(target_user_id, 0)
             await bot.reply_to(message, f"🎉 {user_mention}, статус администратора успешно выдан пользователю с ID {target_user_id}.", parse_mode='HTML')
         except ValueError:
@@ -683,7 +689,8 @@ async def handle_callback_query(call):
         username = profile['username']
         balance = profile['balance']
         successful_deals = profile['successful_deals']
-        balance_text = "∞" if call.from_user.id in ADMIN_IDS else f"{balance:.2f}"
+        admin_ids = get_admin_ids()
+        balance_text = "∞" if call.from_user.id in admin_ids else f"{balance:.2f}"
         text = (
             "👤 Ваш профиль\n\n"
             f"Пользователь: {username}\n"
@@ -769,7 +776,8 @@ async def handle_pay_from_balance(chat_id, user_id, deal_id, message_id):
     creator_username = deal['creator_username']
     deal_type = deal['deal_type']
     
-    if user_id not in ADMIN_IDS:
+    admin_ids = get_admin_ids()
+    if user_id not in admin_ids:
         user_balance = get_user_balance(user_id)
         if user_balance < amount and currency not in ['Stars', 'TON']:
             await bot.send_message(chat_id, "⚠ У вас недостаточно средств на балансе.", reply_markup=get_in_deal_keyboard(deal_id, 'in_progress'))
@@ -868,7 +876,7 @@ async def handle_leave_deal(chat_id, user_id, deal_id):
     participant_link = f"<a href='tg://user?id={participant_id}'>@{participant_username or 'ID' + str(participant_id)}</a>" if participant_id else "Нет"
     message_text = (
         f"🚫 Сделка отменена одним из участников.\n\n"
-        f"🆔 ID сделки: {deal_id}\n"
+        f"�ID сделки: {deal_id}\n"
         f"📦 Тип: {get_deal_type_display(deal_type)}\n"
         f"💰 Сумма: {amount} {currency}\n"
         f"📋 Товар/Подарок: {item_links or 'Не указано'}\n"
