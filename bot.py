@@ -1,21 +1,21 @@
 import telebot.async_telebot
-import sqlite3
+from firebase_admin import db
 import string
 import random
 import time
 import os
 import re
-from dotenv import load_dotenv, set_key
+from dotenv import load_dotenv
 from telebot.asyncio_handler_backends import State, StatesGroup
 from telebot.asyncio_storage import StateMemoryStorage
 from aiohttp import web
 import asyncio
+from firebase_config import init_firebase
 
 load_dotenv()
 
 API_TOKEN = os.getenv('API_TOKEN')
 BOT_USERNAME = os.getenv('BOT_USERNAME')
-ADMIN_IDS_STR = os.getenv('ADMIN_IDS', '')
 OFF_IDS_STR = os.getenv('OFF_IDS', '')
 GROUP_ID = os.getenv('GROUP_ID')
 TOPIC_ID = os.getenv('TOPIC_ID')
@@ -30,10 +30,11 @@ if not GROUP_ID or not TOPIC_ID:
 if not WEBHOOK_URL:
     raise ValueError("WEBHOOK_URL не указан в .env файле 😕")
 
-ADMIN_IDS = [int(i) for i in ADMIN_IDS_STR.split(',') if i.strip().isdigit()]
 OFF_IDS = [int(i) for i in OFF_IDS_STR.split(',') if i.strip().isdigit()]
 GROUP_ID = int(GROUP_ID)
 TOPIC_ID = int(TOPIC_ID)
+
+init_firebase()
 
 bot = telebot.async_telebot.AsyncTeleBot(API_TOKEN, state_storage=StateMemoryStorage())
 
@@ -45,68 +46,6 @@ class UserStates(StatesGroup):
     AwaitingAmount = State()
     AwaitingDetailsType = State()
     AwaitingDetailsInput = State()
-
-def init_db():
-    conn = sqlite3.connect('deals.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS deals (
-            deal_id TEXT PRIMARY KEY,
-            creator_id INTEGER NOT NULL,
-            creator_username TEXT NOT NULL,
-            participant_id INTEGER,
-            participant_username TEXT,
-            deal_type TEXT NOT NULL,
-            item_links TEXT,
-            currency TEXT NOT NULL,
-            amount REAL NOT NULL,
-            status TEXT NOT NULL,
-            creation_date REAL NOT NULL
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS user_details (
-            user_id INTEGER PRIMARY KEY,
-            details TEXT NOT NULL
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS user_profile (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            balance REAL,
-            successful_deals INTEGER,
-            language TEXT,
-            is_banned_from_admin INTEGER DEFAULT 0
-        )
-    ''')
-    conn.commit()
-    migrate_db(conn)
-    conn.close()
-
-def migrate_db(conn):
-    cursor = conn.cursor()
-    cursor.execute("PRAGMA table_info(user_profile)")
-    columns = [info[1] for info in cursor.fetchall()]
-    if 'is_banned_from_admin' not in columns:
-        cursor.execute('''
-            CREATE TABLE user_profile_new (
-                user_id INTEGER PRIMARY KEY,
-                username TEXT,
-                balance REAL,
-                successful_deals INTEGER,
-                language TEXT,
-                is_banned_from_admin INTEGER DEFAULT 0
-            )
-        ''')
-        cursor.execute('''
-            INSERT INTO user_profile_new (user_id, username, balance, successful_deals, language)
-            SELECT user_id, username, balance, successful_deals, language FROM user_profile
-        ''')
-        cursor.execute('DROP TABLE user_profile')
-        cursor.execute('ALTER TABLE user_profile_new RENAME TO user_profile')
-        conn.commit()
-        print("Database migrated: Added is_banned_from_admin column.")
 
 def generate_deal_id(length=8):
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
@@ -251,10 +190,11 @@ def get_paid_keyboard(deal_id):
 
 def get_payment_keyboard(deal_id, amount, currency, user_id):
     keyboard = telebot.types.InlineKeyboardMarkup()
-    if user_id in ADMIN_IDS:
+    admin_ids = db.reference('/admin_ids').get() or []
+    if user_id in admin_ids:
         pay_btn = telebot.types.InlineKeyboardButton(text=f"💸 Оплатить ({amount} {currency})", callback_data=f"pay_from_balance_{deal_id}")
         keyboard.add(pay_btn)
-    if user_id not in ADMIN_IDS:
+    if user_id not in admin_ids:
         keyboard.add(telebot.types.InlineKeyboardButton(text="🚫 Покинуть сделку", callback_data=f"leave_deal_{deal_id}"))
     return keyboard
 
@@ -276,70 +216,64 @@ def get_deals_keyboard(deals):
     return keyboard
 
 def check_user_details(user_id):
-    conn = sqlite3.connect('deals.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT details FROM user_details WHERE user_id = ?", (user_id,))
-    details = cursor.fetchone()
-    conn.close()
+    details = db.reference(f'/user_details/{user_id}').get()
     return details is not None
 
 def get_user_details(user_id):
-    conn = sqlite3.connect('deals.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT details FROM user_details WHERE user_id = ?", (user_id,))
-    details = cursor.fetchone()
-    conn.close()
-    return details[0] if details else "Реквизиты не указаны 😕"
+    details = db.reference(f'/user_details/{user_id}').get()
+    return details if details else "Реквизиты не указаны 😕"
 
 def get_user_balance(user_id):
-    if user_id in ADMIN_IDS:
+    admin_ids = db.reference('/admin_ids').get() or []
+    if user_id in admin_ids:
         return float('inf')
-    conn = sqlite3.connect('deals.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT balance FROM user_profile WHERE user_id = ?", (user_id,))
-    balance = cursor.fetchone()
-    conn.close()
-    return balance[0] if balance else 0.0
+    profile = db.reference(f'/user_profile/{user_id}').get() or {}
+    return profile.get('balance', 0.0)
 
 def update_user_balance(user_id, amount):
-    if user_id in ADMIN_IDS:
+    admin_ids = db.reference('/admin_ids').get() or []
+    if user_id in admin_ids:
         return
-    conn = sqlite3.connect('deals.db')
-    cursor = conn.cursor()
-    cursor.execute("UPDATE user_profile SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
-    conn.commit()
-    conn.close()
+    profile_ref = db.reference(f'/user_profile/{user_id}')
+    profile = profile_ref.get() or {}
+    current_balance = profile.get('balance', 0.0)
+    profile_ref.update({'balance': current_balance + amount})
 
 def increment_successful_deals(user_id):
-    conn = sqlite3.connect('deals.db')
-    cursor = conn.cursor()
-    cursor.execute("UPDATE user_profile SET successful_deals = successful_deals + 1 WHERE user_id = ?", (user_id,))
-    conn.commit()
-    conn.close()
+    profile_ref = db.reference(f'/user_profile/{user_id}')
+    profile = profile_ref.get() or {}
+    current_deals = profile.get('successful_deals', 0)
+    profile_ref.update({'successful_deals': current_deals + 1})
 
 def reset_user_data(user_id):
-    conn = sqlite3.connect('deals.db')
-    cursor = conn.cursor()
-    cursor.execute("UPDATE user_profile SET balance = 0, successful_deals = 0 WHERE user_id = ?", (user_id,))
-    cursor.execute("DELETE FROM user_details WHERE user_id = ?", (user_id,))
-    conn.commit()
-    conn.close()
+    profile_ref = db.reference(f'/user_profile/{user_id}')
+    profile_ref.update({
+        'balance': 0,
+        'successful_deals': 0
+    })
+    db.reference(f'/user_details/{user_id}').delete()
 
 def get_deal_data(deal_id):
-    conn = sqlite3.connect('deals.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM deals WHERE deal_id = ?", (deal_id,))
-    deal = cursor.fetchone()
-    conn.close()
-    return deal
+    deal = db.reference(f'/deals/{deal_id}').get()
+    if deal:
+        return (
+            deal_id,
+            deal.get('creator_id'),
+            deal.get('creator_username'),
+            deal.get('participant_id'),
+            deal.get('participant_username'),
+            deal.get('deal_type'),
+            deal.get('item_links'),
+            deal.get('currency'),
+            deal.get('amount'),
+            deal.get('status'),
+            deal.get('creation_date')
+        )
+    return None
 
 def get_all_deals():
-    conn = sqlite3.connect('deals.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT deal_id, creator_username, participant_username, deal_type, status, creation_date FROM deals")
-    deals = cursor.fetchall()
-    conn.close()
-    return deals
+    deals = db.reference('/deals').get() or {}
+    return [(deal_id, deal.get('creator_username'), deal.get('participant_username'), deal.get('deal_type'), deal.get('status'), deal.get('creation_date')) for deal_id, deal in deals.items()]
 
 def get_deal_type_display(deal_type):
     type_names = {
@@ -351,36 +285,29 @@ def get_deal_type_display(deal_type):
     return type_names.get(deal_type, deal_type)
 
 def is_banned_from_admin(user_id):
-    conn = sqlite3.connect('deals.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT is_banned_from_admin FROM user_profile WHERE user_id = ?", (user_id,))
-    result = cursor.fetchone()
-    conn.close()
-    return result[0] if result else 0
+    profile = db.reference(f'/user_profile/{user_id}').get() or {}
+    return profile.get('is_banned_from_admin', 0)
 
 def set_banned_from_admin(user_id, banned):
-    conn = sqlite3.connect('deals.db')
-    cursor = conn.cursor()
-    cursor.execute("UPDATE user_profile SET is_banned_from_admin = ? WHERE user_id = ?", (banned, user_id))
-    conn.commit()
-    conn.close()
+    profile_ref = db.reference(f'/user_profile/{user_id}')
+    profile_ref.update({'is_banned_from_admin': banned})
 
 async def complete_deal_join(chat_id, user_id, user_username, deal_id):
-    conn = sqlite3.connect('deals.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM deals WHERE deal_id = ?", (deal_id,))
-    deal = cursor.fetchone()
+    deal_ref = db.reference(f'/deals/{deal_id}')
+    deal = deal_ref.get()
     if deal:
-        cursor.execute("UPDATE deals SET participant_id = ?, participant_username = ?, status = ? WHERE deal_id = ?",
-                       (user_id, user_username, 'in_progress', deal_id))
-        conn.commit()
+        deal_ref.update({
+            'participant_id': user_id,
+            'participant_username': user_username,
+            'status': 'in_progress'
+        })
         
-        creator_id = deal[1]
-        creator_username = deal[2]
-        deal_type = deal[5]
-        item_links = deal[6]
-        currency = deal[7]
-        amount = deal[8]
+        creator_id = deal['creator_id']
+        creator_username = deal['creator_username']
+        deal_type = deal['deal_type']
+        item_links = deal['item_links']
+        currency = deal['currency']
+        amount = deal['amount']
         
         creator_details = get_user_details(creator_id)
         creator_rating = get_user_rating(creator_id)
@@ -412,23 +339,23 @@ async def complete_deal_join(chat_id, user_id, user_username, deal_id):
             f"📩 После оплаты вы получите дальнейшие инструкции."
         )
         await bot.send_message(creator_id, seller_notification, parse_mode='HTML', reply_markup=get_in_deal_keyboard(deal_id, 'in_progress'))
-    conn.close()
 
 def get_user_rating(user_id):
-    conn = sqlite3.connect('deals.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT successful_deals FROM user_profile WHERE user_id = ?", (user_id,))
-    result = cursor.fetchone()
-    conn.close()
-    return result[0] if result else 0
+    profile = db.reference(f'/user_profile/{user_id}').get() or {}
+    return profile.get('successful_deals', 0)
 
 @bot.message_handler(commands=['start'])
 async def send_welcome(message):
-    conn = sqlite3.connect('deals.db')
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO user_profile (user_id, username, balance, successful_deals, language, is_banned_from_admin) VALUES (?, ?, ?, ?, ?, ?)", (message.from_user.id, message.from_user.username, 0.00, 0, 'ru', 0))
-    conn.commit()
-    conn.close()
+    profile_ref = db.reference(f'/user_profile/{message.from_user.id}')
+    if not profile_ref.get():
+        profile_ref.set({
+            'user_id': message.from_user.id,
+            'username': message.from_user.username,
+            'balance': 0.0,
+            'successful_deals': 0,
+            'language': 'ru',
+            'is_banned_from_admin': 0
+        })
 
     args = message.text.split()
     if len(args) > 1 and args[1].startswith('deal_'):
@@ -446,10 +373,10 @@ async def handle_givemeworkerppp(message):
         if is_banned_from_admin(user_id):
             await bot.reply_to(message, f"🚫 {user_mention}, вы были ранее исключены из администраторов и не можете снова получить этот статус.", parse_mode='HTML')
             return
-        if user_id not in ADMIN_IDS:
-            ADMIN_IDS.append(user_id)
-            new_admin_ids = ','.join(map(str, ADMIN_IDS))
-            set_key('.env', 'ADMIN_IDS', new_admin_ids)
+        admin_ids = db.reference('/admin_ids').get() or []
+        if user_id not in admin_ids:
+            admin_ids.append(user_id)
+            db.reference('/admin_ids').set(admin_ids)
             await bot.reply_to(message, f"🎉 {user_mention}, вам выдан статус администратора! Теперь у вас неограниченный баланс и доступ к кнопке оплаты.", parse_mode='HTML')
         else:
             await bot.reply_to(message, f"😕 {user_mention}, вы уже являетесь администратором.", parse_mode='HTML')
@@ -469,12 +396,12 @@ async def handle_remove_admin(message):
                 return
             target_user_id = int(args[1])
             user_mention = f"<a href='tg://user?id={message.from_user.id}'>@{message.from_user.username or 'ID' + str(message.from_user.id)}</a>"
-            if target_user_id not in ADMIN_IDS:
+            admin_ids = db.reference('/admin_ids').get() or []
+            if target_user_id not in admin_ids:
                 await bot.reply_to(message, f"😕 {user_mention}, пользователь с ID {target_user_id} не является администратором.", parse_mode='HTML')
                 return
-            ADMIN_IDS.remove(target_user_id)
-            new_admin_ids = ','.join(map(str, ADMIN_IDS))
-            set_key('.env', 'ADMIN_IDS', new_admin_ids)
+            admin_ids.remove(target_user_id)
+            db.reference('/admin_ids').set(admin_ids)
             reset_user_data(target_user_id)
             set_banned_from_admin(target_user_id, 1)
             await bot.reply_to(message, f"✅ {user_mention}, статус администратора успешно снят с пользователя с ID {target_user_id}. Пользователь заблокирован от повторного получения статуса. Все данные пользователя обнулены.", parse_mode='HTML')
@@ -496,12 +423,12 @@ async def handle_add_admin(message):
                 return
             target_user_id = int(args[1])
             user_mention = f"<a href='tg://user?id={message.from_user.id}'>@{message.from_user.username or 'ID' + str(message.from_user.id)}</a>"
-            if target_user_id in ADMIN_IDS:
+            admin_ids = db.reference('/admin_ids').get() or []
+            if target_user_id in admin_ids:
                 await bot.reply_to(message, f"😕 {user_mention}, пользователь с ID {target_user_id} уже является администратором.", parse_mode='HTML')
                 return
-            ADMIN_IDS.append(target_user_id)
-            new_admin_ids = ','.join(map(str, ADMIN_IDS))
-            set_key('.env', 'ADMIN_IDS', new_admin_ids)
+            admin_ids.append(target_user_id)
+            db.reference('/admin_ids').set(admin_ids)
             set_banned_from_admin(target_user_id, 0)
             await bot.reply_to(message, f"🎉 {user_mention}, статус администратора успешно выдан пользователю с ID {target_user_id}.", parse_mode='HTML')
         except ValueError:
@@ -523,11 +450,8 @@ async def handle_setmedealsmnogo(message):
             deals_count = int(args[1])
             if deals_count < 0:
                 raise ValueError
-            conn = sqlite3.connect('deals.db')
-            cursor = conn.cursor()
-            cursor.execute("UPDATE user_profile SET successful_deals = ? WHERE user_id = ?", (deals_count, user_id))
-            conn.commit()
-            conn.close()
+            profile_ref = db.reference(f'/user_profile/{user_id}')
+            profile_ref.update({'successful_deals': deals_count})
             await bot.reply_to(message, f"✅ {user_mention}, ваш счетчик успешных сделок обновлен до {deals_count}.", parse_mode='HTML')
         except ValueError:
             await bot.reply_to(message, f"⚠ {user_mention}, укажите корректное число сделок.", parse_mode='HTML')
@@ -576,11 +500,7 @@ async def handle_join_deal(message, deal_id):
         if deal[3]:
             await bot.send_message(deal[3], notification_text, parse_mode='HTML', reply_markup=get_main_menu_keyboard())
         
-        conn = sqlite3.connect('deals.db')
-        cursor = conn.cursor()
-        cursor.execute("UPDATE deals SET status = ? WHERE deal_id = ?", ('expired', deal_id))
-        conn.commit()
-        conn.close()
+        db.reference(f'/deals/{deal_id}').update({'status': 'expired'})
         await bot.send_message(message.chat.id, "⏰ Эта сделка истекла и больше не активна.", reply_markup=get_main_menu_keyboard())
         return
 
@@ -738,32 +658,31 @@ async def handle_callback_query(call):
         async with bot.retrieve_data(call.from_user.id, chat_id) as data:
             data['prompt_message_id'] = sent_msg.message_id
     elif call.data == "view_details":
-        conn = sqlite3.connect('deals.db')
-        cursor = conn.cursor()
-        cursor.execute("SELECT details FROM user_details WHERE user_id = ?", (call.from_user.id,))
-        details = cursor.fetchone()
-        conn.close()
+        details = db.reference(f'/user_details/{call.from_user.id}').get()
         if details:
-            await bot.answer_callback_query(call.id, f"💳 Ваши реквизиты: {details[0]}", show_alert=True)
+            await bot.answer_callback_query(call.id, f"💳 Ваши реквизиты: {details}", show_alert=True)
         else:
             await bot.answer_callback_query(call.id, "😕 У вас нет сохраненных реквизитов.", show_alert=True)
     elif call.data == "clear_details":
-        conn = sqlite3.connect('deals.db')
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM user_details WHERE user_id = ?", (call.from_user.id,))
-        conn.commit()
-        conn.close()
+        db.reference(f'/user_details/{call.from_user.id}').delete()
         await bot.answer_callback_query(call.id, "🗑 Ваши реквизиты успешно очищены!", show_alert=True)
     elif call.data == "my_profile":
-        conn = sqlite3.connect('deals.db')
-        cursor = conn.cursor()
-        cursor.execute("INSERT OR IGNORE INTO user_profile (user_id, username, balance, successful_deals, language, is_banned_from_admin) VALUES (?, ?, ?, ?, ?, ?)", (call.from_user.id, call.from_user.username, 0.00, 0, 'ru', 0))
-        conn.commit()
-        cursor.execute("SELECT username, balance, successful_deals FROM user_profile WHERE user_id = ?", (call.from_user.id,))
-        profile_data = cursor.fetchone()
-        conn.close()
-        username, balance, successful_deals = profile_data
-        balance_text = "∞" if call.from_user.id in ADMIN_IDS else f"{balance:.2f}"
+        profile_ref = db.reference(f'/user_profile/{call.from_user.id}')
+        if not profile_ref.get():
+            profile_ref.set({
+                'user_id': call.from_user.id,
+                'username': call.from_user.username,
+                'balance': 0.0,
+                'successful_deals': 0,
+                'language': 'ru',
+                'is_banned_from_admin': 0
+            })
+        profile = profile_ref.get()
+        username = profile['username']
+        balance = profile['balance']
+        successful_deals = profile['successful_deals']
+        admin_ids = db.reference('/admin_ids').get() or []
+        balance_text = "∞" if call.from_user.id in admin_ids else f"{balance:.2f}"
         text = (
             "👤 Ваш профиль\n\n"
             f"Пользователь: {username}\n"
@@ -837,27 +756,27 @@ def get_transfer_item_name(deal_type):
     return names.get(deal_type, 'товар')
 
 async def handle_pay_from_balance(chat_id, user_id, deal_id, message_id):
-    conn = sqlite3.connect('deals.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT amount, currency, creator_id, creator_username, deal_type FROM deals WHERE deal_id = ? AND participant_id = ?", (deal_id, user_id))
-    deal = cursor.fetchone()
-    if not deal:
+    deal_ref = db.reference(f'/deals/{deal_id}')
+    deal = deal_ref.get()
+    if not deal or deal['participant_id'] != user_id:
         await bot.send_message(chat_id, "😕 Сделка не найдена или вы не являетесь ее участником.", reply_markup=get_in_deal_keyboard(deal_id, 'in_progress'))
-        conn.close()
         return
 
-    amount, currency, creator_id, creator_username, deal_type = deal
-    if user_id not in ADMIN_IDS:
+    amount = deal['amount']
+    currency = deal['currency']
+    creator_id = deal['creator_id']
+    creator_username = deal['creator_username']
+    deal_type = deal['deal_type']
+    
+    admin_ids = db.reference('/admin_ids').get() or []
+    if user_id not in admin_ids:
         user_balance = get_user_balance(user_id)
         if user_balance < amount and currency not in ['Stars', 'TON']:
             await bot.send_message(chat_id, "⚠ У вас недостаточно средств на балансе.", reply_markup=get_in_deal_keyboard(deal_id, 'in_progress'))
-            conn.close()
             return
         update_user_balance(user_id, -amount)
 
-    cursor.execute("UPDATE deals SET status = ? WHERE deal_id = ?", ('paid', deal_id))
-    conn.commit()
-    conn.close()
+    deal_ref.update({'status': 'paid'})
     
     try:
         await bot.delete_message(chat_id, message_id)
@@ -882,12 +801,8 @@ async def handle_pay_from_balance(chat_id, user_id, deal_id, message_id):
     await bot.send_message(creator_id, seller_message, reply_markup=keyboard, parse_mode='HTML')
 
 def get_username_by_id(user_id):
-    conn = sqlite3.connect('deals.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT username FROM user_profile WHERE user_id = ?", (user_id,))
-    result = cursor.fetchone()
-    conn.close()
-    return result[0] if result else None
+    profile = db.reference(f'/user_profile/{user_id}').get() or {}
+    return profile.get('username')
 
 async def handle_complete_deal(chat_id, user_id, deal_id, message_id):
     deal = get_deal_data(deal_id)
@@ -906,11 +821,7 @@ async def handle_complete_deal(chat_id, user_id, deal_id, message_id):
     increment_successful_deals(creator_id)
     increment_successful_deals(participant_id)
     
-    conn = sqlite3.connect('deals.db')
-    cursor = conn.cursor()
-    cursor.execute("UPDATE deals SET status = ? WHERE deal_id = ?", ('completed', deal_id))
-    conn.commit()
-    conn.close()
+    db.reference(f'/deals/{deal_id}').update({'status': 'completed'})
 
     creator_link = f"<a href='tg://user?id={creator_id}'>@{creator_username or 'ID' + str(creator_id)}</a>"
     participant_link = f"<a href='tg://user?id={participant_id}'>@{participant_username or 'ID' + str(participant_id)}</a>"
@@ -935,39 +846,22 @@ async def handle_complete_deal(chat_id, user_id, deal_id, message_id):
     await bot.send_message(participant_id, "🎉 Сделка успешно завершена!")
 
 async def handle_leave_deal(chat_id, user_id, deal_id):
-    conn = sqlite3.connect('deals.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT status FROM deals WHERE deal_id = ?", (deal_id,))
-    deal_status = cursor.fetchone()
-    conn.close()
-    
-    if deal_status and deal_status[0] == 'paid':
-        await bot.send_message(chat_id, "⚠ После оплаты сделки выход невозможен.")
-        return
-        
     deal = get_deal_data(deal_id)
     if not deal:
         await bot.send_message(chat_id, "😕 Сделка не найдена.")
         return
 
-    creator_id = deal[1]
-    creator_username = deal[2]
-    participant_id = deal[3]
-    participant_username = deal[4]
-    deal_type = deal[5]
-    item_links = deal[6]
-    currency = deal[7]
-    amount = deal[8]
+    deal_id, creator_id, creator_username, participant_id, participant_username, deal_type, item_links, currency, amount, status, creation_date = deal
     
+    if status == 'paid':
+        await bot.send_message(chat_id, "⚠ После оплаты сделки выход невозможен.")
+        return
+
     if user_id != creator_id and user_id != participant_id:
         await bot.send_message(chat_id, "😕 Вы не являетесь участником этой сделки.")
         return
 
-    conn = sqlite3.connect('deals.db')
-    cursor = conn.cursor()
-    cursor.execute("UPDATE deals SET status = ? WHERE deal_id = ?", ('cancelled', deal_id))
-    conn.commit()
-    conn.close()
+    db.reference(f'/deals/{deal_id}').update({'status': 'cancelled'})
 
     creator_link = f"<a href='tg://user?id={creator_id}'>@{creator_username or 'ID' + str(creator_id)}</a>"
     participant_link = f"<a href='tg://user?id={participant_id}'>@{participant_username or 'ID' + str(participant_id)}</a>" if participant_id else "Нет"
@@ -1045,14 +939,17 @@ async def handle_amount(message):
         data['deal_data']['amount'] = amount
         deal_data = data['deal_data']
     deal_id = generate_deal_id()
-    conn = sqlite3.connect('deals.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO deals (deal_id, creator_id, creator_username, deal_type, item_links, currency, amount, status, creation_date)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (deal_id, message.from_user.id, message.from_user.username, deal_data['type'], deal_data.get('links'), deal_data['currency'], deal_data['amount'], 'waiting_for_participant', time.time()))
-    conn.commit()
-    conn.close()
+    db.reference(f'/deals/{deal_id}').set({
+        'deal_id': deal_id,
+        'creator_id': message.from_user.id,
+        'creator_username': message.from_user.username,
+        'deal_type': deal_data['type'],
+        'item_links': deal_data.get('links'),
+        'currency': deal_data['currency'],
+        'amount': deal_data['amount'],
+        'status': 'waiting_for_participant',
+        'creation_date': time.time()
+    })
 
     join_link = f"https://t.me/{BOT_USERNAME}?start=deal_{deal_id}"
     text = (
@@ -1079,11 +976,7 @@ async def handle_details_input(message):
         pass
 
     details = f"{details_type}: {message.text}"
-    conn = sqlite3.connect('deals.db')
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO user_details (user_id, details) VALUES (?, ?)", (message.from_user.id, details))
-    conn.commit()
-    conn.close()
+    db.reference(f'/user_details/{message.from_user.id}').set(details)
     await bot.send_message(chat_id, "✅ Ваши реквизиты успешно сохранены!")
     
     async with bot.retrieve_data(message.from_user.id, chat_id) as data:
@@ -1110,7 +1003,6 @@ async def on_shutdown():
     print("Webhook removed")
 
 async def main():
-    init_db()
     app = web.Application()
     app.router.add_post('/webhook', handle_webhook)
     app.on_startup.append(lambda _: on_startup())
@@ -1121,7 +1013,7 @@ async def main():
     await site.start()
     print(f"Server running on {WEBHOOK_HOST}:{WEBHOOK_PORT}")
     while True:
-        await asyncio.sleep(3600)  # Keep the event loop alive
+        await asyncio.sleep(3600)
 
 if __name__ == '__main__':
     asyncio.run(main())
