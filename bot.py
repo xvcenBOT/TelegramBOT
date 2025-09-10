@@ -163,7 +163,7 @@ def get_add_details_keyboard(lang='ru'):
     keyboard.add(add_details_btn)
     return keyboard
 
-def get_details_menu_keyboard():
+def get_details_menu_keyboard(lang='ru'):
     keyboard = telebot.types.InlineKeyboardMarkup(row_width=1)
     add_btn = telebot.types.InlineKeyboardButton(text="➕ Добавить реквизиты", callback_data="add_details")
     view_btn = telebot.types.InlineKeyboardButton(text="👀 Мои реквизиты", callback_data="view_details")
