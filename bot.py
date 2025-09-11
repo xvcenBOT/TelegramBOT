@@ -61,15 +61,24 @@ def get_admin_ids():
         now = time.time()
         if _ADMIN_IDS_CACHE['ids'] is not None and (now - _ADMIN_IDS_CACHE['ts'] < _ADMIN_IDS_CACHE['ttl']):
             return _ADMIN_IDS_CACHE['ids']
+        
         admin_ref = db.collection('admin_ids').document('init').get()
-        admin_ids = admin_ref.to_dict().get('ids', []) if admin_ref.exists else []
+        
+        if admin_ref.exists:
+            admin_ids = admin_ref.to_dict().get('ids', [])
+        else:
+            # Если документ не существует, создаем его с пустым массивом
+            db.collection('admin_ids').document('init').set({'ids': []})
+            admin_ids = []
+        
         _ADMIN_IDS_CACHE['ids'] = admin_ids
         _ADMIN_IDS_CACHE['ts'] = now
         logger.info(f"Fetched admin_ids: {admin_ids}")
         return admin_ids
+        
     except Exception as e:
         logger.error(f"Error fetching admin_ids: {e}")
-        return []
+        return []  # Возвращаем пустой массив в случае ошибки
 
 bot = telebot.async_telebot.AsyncTeleBot(API_TOKEN, state_storage=StateMemoryStorage())
 bot.add_custom_filter(StateFilter(bot))
