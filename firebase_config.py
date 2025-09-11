@@ -23,21 +23,37 @@ def init_firebase():
         db = firestore.client()
         logger.info("Firebase initialized")
 
-        # Инициализация структуры базы данных
-        admin_ref = db.collection('admin_ids').document('init')
-        if not admin_ref.get().exists:
-            admin_ref.set({'ids': [7302972623, 8274288863]})
-            logger.info("admin_ids initialized")
-        if not db.collection('user_profile').limit(1).get():
-            db.collection('user_profile').document('init').set({})
-            logger.info("user_profile initialized")
-        if not db.collection('deals').limit(1).get():
-            db.collection('deals').document('init').set({})
-            logger.info("deals initialized")
-        if not db.collection('user_details').limit(1).get():
-            db.collection('user_details').document('init').set({})
-            logger.info("user_details initialized")
+        # Инициализация структуры базы данных - создаем пустые коллекции
+        try:
+            # Создаем admin_ids с пустым массивом
+            admin_ref = db.collection('admin_ids').document('init')
+            if not admin_ref.get().exists:
+                admin_ref.set({'ids': []})  # Пустой массив админов
+                logger.info("admin_ids collection initialized with empty array")
+
+            # Создаем остальные коллекции с пустыми документами
+            collections_to_init = ['user_profile', 'deals', 'user_details']
+            for collection_name in collections_to_init:
+                try:
+                    # Проверяем существование коллекции через попытку получить любой документ
+                    collection_ref = db.collection(collection_name)
+                    docs = list(collection_ref.limit(1).stream())
+                    
+                    if not docs:  # Если коллекция пустая или не существует
+                        collection_ref.document('init').set({})
+                        logger.info(f"{collection_name} collection initialized")
+                        
+                except Exception as e:
+                    logger.error(f"Error initializing {collection_name}: {e}")
+                    # Принудительно создаем документ
+                    db.collection(collection_name).document('init').set({})
+                    logger.info(f"{collection_name} force initialized")
+                    
+        except Exception as e:
+            logger.error(f"Error during collections initialization: {e}")
+            
         return db
+        
     except Exception as e:
         logger.error(f"Error initializing Firebase: {e}")
         raise
