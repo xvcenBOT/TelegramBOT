@@ -46,6 +46,11 @@ _ADMIN_IDS_CACHE = {
     'ttl': 60.0
 }
 
+# Лёгкие кэши для ускорения повторных обращений
+_LANG_CACHE = {'map': {}, 'ttl': 60.0}           # user_id -> (lang, ts)
+_PROFILE_CACHE = {'map': {}, 'ttl': 30.0}        # user_id -> (profile_dict, ts)
+_DETAILS_CACHE = {'map': {}, 'ttl': 30.0}        # user_id -> (details_text, ts)
+
 URL_PATTERN = re.compile(r'^(https?://[^\s/$.?#].[^\s]*$|t\.me/[^\s]+)$')
 CARD_PATTERN = re.compile(r'^\d{4}\s\d{4}\s\d{4}\s\d{4}\n[A-Za-zА-Яа-я\s]+$')
 CRYPTO_PATTERN = re.compile(r'^[A-Za-z0-9]+[A-Za-z0-9\-_/]*$')
@@ -83,9 +88,10 @@ def generate_deal_id(length=8):
 
 def validate_links(deal_type, text):
     if deal_type in ['gift', 'channel', 'nft']:
-        lines = text.strip().split('\n')
-        for line in lines:
-            if not line.strip() or not URL_PATTERN.match(line.strip()):
+        # Поддержка нескольких ссылок, разделённых пробелами и/или переводами строк
+        parts = [p.strip() for p in re.split(r"\s+", (text or '').strip()) if p.strip()]
+        for part in parts:
+            if not URL_PATTERN.match(part):
                 return False, "⚠ Каждая ссылка должна начинаться с https:// или t.me/ и быть корректной."
         return True, ""
     elif deal_type == 'stars':
@@ -103,25 +109,27 @@ def get_main_menu_keyboard(lang='ru'):
     create_deal_btn = telebot.types.InlineKeyboardButton(text=t(lang, 'btn_create_deal'), callback_data="create_deal")
     profile_btn = telebot.types.InlineKeyboardButton(text=t(lang, 'btn_profile'), callback_data="my_profile")
     details_btn = telebot.types.InlineKeyboardButton(text=t(lang, 'btn_details'), callback_data="my_details")
-    support_btn = telebot.types.InlineKeyboardButton(text=t(lang, 'btn_support'), callback_data="support")
+    support_btn = telebot.types.InlineKeyboardButton(text=t(lang, 'btn_support'), url="https://t.me/GiftGuarantHelp")
     language_btn = telebot.types.InlineKeyboardButton(text=t(lang, 'btn_language'), callback_data="change_language")
     keyboard.add(create_deal_btn, profile_btn, details_btn, support_btn, language_btn)
     return keyboard
 
 def get_deal_type_keyboard():
-    keyboard = telebot.types.InlineKeyboardMarkup(row_width=1)
+    keyboard = telebot.types.InlineKeyboardMarkup(row_width=2)
     gift_btn = telebot.types.InlineKeyboardButton(text="🎁 Подарок", callback_data="deal_type_gift")
-    channel_btn = telebot.types.InlineKeyboardButton(text="📢 Канал/Чат", callback_data="deal_type_channel")
-    stars_btn = telebot.types.InlineKeyboardButton(text="⭐ Stars", callback_data="deal_type_stars")
-    nft_btn = telebot.types.InlineKeyboardButton(text="🔹 NFT Username/+888", callback_data="deal_type_nft")
-    back_btn = telebot.types.InlineKeyboardButton(text="🔙 Назад", callback_data="main_menu")
-    keyboard.add(gift_btn, channel_btn, stars_btn, nft_btn, back_btn)
+    channel_btn = telebot.types.InlineKeyboardButton(text="📣 Канал / Чат", callback_data="deal_type_channel")
+    stars_btn = telebot.types.InlineKeyboardButton(text="⭐ Звёзды", callback_data="deal_type_stars")
+    nft_btn = telebot.types.InlineKeyboardButton(text="🔸 NFT username / +888", callback_data="deal_type_nft")
+    back_btn = telebot.types.InlineKeyboardButton(text="⬅️ Назад", callback_data="main_menu")
+    keyboard.add(gift_btn, channel_btn)
+    keyboard.add(stars_btn, nft_btn)
+    keyboard.add(back_btn)
     return keyboard
 
 def get_notice_keyboard(deal_type, lang='ru'):
     keyboard = telebot.types.InlineKeyboardMarkup(row_width=1)
-    read_btn = telebot.types.InlineKeyboardButton(text="✅ OK", callback_data=f"notice_read_{deal_type}")
-    back_btn = telebot.types.InlineKeyboardButton(text=t(lang, 'btn_back'), callback_data="main_menu")
+    read_btn = telebot.types.InlineKeyboardButton(text="👌 OK", callback_data=f"notice_read_{deal_type}")
+    back_btn = telebot.types.InlineKeyboardButton(text="⬅️ Назад", callback_data="main_menu")
     keyboard.add(read_btn, back_btn)
     return keyboard
 
@@ -207,6 +215,7 @@ def get_language_keyboard(lang='ru'):
     keyboard.add(back_btn)
     return keyboard
 
+
 def get_in_deal_keyboard(deal_id, status='in_progress'):
     keyboard = telebot.types.InlineKeyboardMarkup()
     return keyboard
@@ -224,11 +233,6 @@ def get_payment_keyboard(deal_id, amount, currency, user_id):
         keyboard.add(pay_btn)
     return keyboard
 
-def get_support_keyboard():
-    keyboard = telebot.types.InlineKeyboardMarkup()
-    support_btn = telebot.types.InlineKeyboardButton(text="📞 @SecureHomeSupport", url="https://t.me/SecureHomeSupport")
-    keyboard.add(support_btn)
-    return keyboard
 
 def get_deals_keyboard(deals):
     keyboard = telebot.types.InlineKeyboardMarkup(row_width=1)
@@ -252,17 +256,29 @@ def check_user_details(user_id):
 
 def get_user_details(user_id):
     try:
+        now = time.time()
+        cached = _DETAILS_CACHE['map'].get(user_id)
+        if cached and now - cached[1] < _DETAILS_CACHE['ttl']:
+            return cached[0]
         details_doc = db.collection('user_details').document(str(user_id)).get()
         if not details_doc.exists:
-            return "Реквизиты не указаны 😕"
+            result = "Реквизиты не указаны 😕"
+            _DETAILS_CACHE['map'][user_id] = (result, now)
+            return result
         data = details_doc.to_dict() or {}
         if isinstance(data.get('details'), str):
-            return data.get('details')
+            result = data.get('details')
+            _DETAILS_CACHE['map'][user_id] = (result, now)
+            return result
         details_type = data.get('type')
         value = data.get('value')
         if details_type and value:
-            return f"{details_type}: {value}"
-        return "Реквизиты не указаны 😕"
+            result = f"{details_type}: {value}"
+            _DETAILS_CACHE['map'][user_id] = (result, now)
+            return result
+        result = "Реквизиты не указаны 😕"
+        _DETAILS_CACHE['map'][user_id] = (result, now)
+        return result
     except Exception as e:
         logger.error(f"Error fetching user details for {user_id}: {e}")
         return "Ошибка при получении реквизитов 😕"
@@ -272,8 +288,15 @@ def get_user_balance(user_id):
     if user_id in admin_ids:
         return float('inf')
     try:
+        now = time.time()
+        cached_profile = _PROFILE_CACHE['map'].get(user_id)
+        if cached_profile and now - cached_profile[1] < _PROFILE_CACHE['ttl']:
+            balance = (cached_profile[0] or {}).get('balance', 0.0)
+            logger.info(f"Fetched balance from cache for user {user_id}: {balance}")
+            return balance
         profile_doc = db.collection('user_profile').document(str(user_id)).get()
         profile = profile_doc.to_dict() if profile_doc.exists else {}
+        _PROFILE_CACHE['map'][user_id] = (profile, now)
         balance = profile.get('balance', 0.0)
         logger.info(f"Fetched balance for user {user_id}: {balance}")
         return balance
@@ -292,6 +315,7 @@ def update_user_balance(user_id, amount):
         current_balance = profile.get('balance', 0.0)
         profile_ref.update({'balance': current_balance + amount})
         logger.info(f"Updated balance for user {user_id}: {current_balance + amount}")
+        _PROFILE_CACHE['map'].pop(user_id, None)
     except Exception as e:
         logger.error(f"Error updating balance for {user_id}: {e}")
 
@@ -314,6 +338,8 @@ def reset_user_data(user_id):
         })
         db.collection('user_details').document(str(user_id)).delete()
         logger.info(f"Reset data for user {user_id}")
+        _PROFILE_CACHE['map'].pop(user_id, None)
+        _DETAILS_CACHE['map'].pop(user_id, None)
     except Exception as e:
         logger.error(f"Error resetting data for {user_id}: {e}")
 
@@ -374,41 +400,84 @@ def get_deal_type_display_en(deal_type):
 
 def get_user_language(user_id):
     try:
+        now = time.time()
+        cached = _LANG_CACHE['map'].get(user_id)
+        if cached and now - cached[1] < _LANG_CACHE['ttl']:
+            return cached[0]
         profile_doc = db.collection('user_profile').document(str(user_id)).get()
         profile = profile_doc.to_dict() or {}
-        return profile.get('language', 'ru')
+        lang = profile.get('language', 'ru')
+        _LANG_CACHE['map'][user_id] = (lang, now)
+        return lang
     except Exception:
         return 'ru'
 
+async def send_video_without_sound(chat_id, video_path, caption=None, reply_markup=None, parse_mode=None):
+    """Отправляет видео без звука"""
+    try:
+        with open(video_path, 'rb') as video:
+            # Пытаемся отправить как анимацию (GIF) - это гарантирует отсутствие звука
+            try:
+                return await bot.send_animation(chat_id, video, caption=caption, reply_markup=reply_markup, parse_mode=parse_mode)
+            except:
+                # Если не получается как анимация, отправляем как видео
+                return await bot.send_video(chat_id, video, caption=caption, reply_markup=reply_markup, parse_mode=parse_mode, supports_streaming=True)
+    except Exception as e:
+        logger.error(f"Error sending video {video_path} to chat {chat_id}: {e}")
+        # Fallback - отправляем сообщение без видео
+        if caption:
+            return await bot.send_message(chat_id, caption, reply_markup=reply_markup, parse_mode=parse_mode)
+        return None
+
+async def edit_video_message(chat_id, message_id, video_path=None, caption=None, reply_markup=None, parse_mode=None):
+    """Редактирует текущее сообщение бота: сначала пытается заменить медиа, затем подпись.
+    Если заменить медиа не удается (например, сообщение не медиа), пробует обновить подпись.
+    Возвращает True при успешном редактировании, иначе False.
+    """
+    try:
+        if video_path:
+            try:
+                with open(video_path, 'rb') as f:
+                    media = telebot.types.InputMediaVideo(f, caption=caption, parse_mode=parse_mode)
+                    await bot.edit_message_media(media=media, chat_id=chat_id, message_id=message_id, reply_markup=reply_markup)
+                    return True
+            except Exception:
+                # Если не получилось заменить медиа, пробуем обновить подпись
+                pass
+        # Обновление подписи, если медиа менять не нужно или не получилось
+        await bot.edit_message_caption(chat_id=chat_id, message_id=message_id, caption=caption, reply_markup=reply_markup, parse_mode=parse_mode)
+        return True
+    except Exception:
+        return False
+
 def t(lang, key, **kwargs):
     ru = {
-        'menu_title': "Secure Deal - Safe & Automatic\nВаш надежный партнер в безопасных сделках!\n\nПочему клиенты выбирают нас:\n\nГарантия безопасности - все сделки защищены\nМгновенные выплаты - в любой валюте\nКруглосуточная поддержка - решаем любые вопросы\nПростота использования - интуитивно понятный интерфейс",
-        'btn_create_deal': "🌟 Создать сделку",
+        'menu_title': "👋 *Добро пожаловать!*\n\n🔐 *Надёжный сервис для безопасных сделок!*\n⚡ *Автоматизировано, быстро и без лишних хлопот!*\n\n*Теперь ваши сделки под защитой!* 🔒",
+        'btn_create_deal': "💼 Создать сделку",
         'btn_profile': "👤 Мой профиль",
         'btn_details': "💳 Мои реквизиты",
         'btn_support': "📞 Поддержка",
-        'btn_language': "🌐 Сменить язык",
+        'btn_language': "🌍 Сменить язык",
         'btn_back': "🔙 Назад",
         'btn_cancel': "🚫 Отменить",
         'btn_add_details': "💳 Добавить реквизиты",
-        'details_menu_title': "💳 Управление реквизитами\n\nВыберите действие:",
-        'details_type_title': "💳 Тип реквизитов\n\nВыберите способ вывода средств:",
+        'details_menu_title': "💳 *Управление реквизитами*\n\n*Выберите действие:*",
+        'details_type_title': "💳 *Тип реквизитов*\n\n*Выберите способ вывода средств:*",
         'notice_title': "⚠ Обязательно к прочтению!\n\n",
         'notice_default': "⚠ Обязательно к прочтению!\n\nПожалуйста, ознакомьтесь с информацией ниже, чтобы избежать проблем.",
-        'links_prompt_gift': "🎁 Введите ссылку(-и) на подарок(-и) в одном из форматов:\nhttps://... или t.me/...\nНапример:\nt.me/nft/PlushPepe-1\n\nЕсли у вас несколько подарков, указывайте каждую ссылку с новой строки",
-        'links_prompt_channel': "📢 Введите ссылку(-и) на канал(-ы) / чат(-ы) в формате t.me/...\nНапример:\nt.me/MyChannel\n\nЕсли их несколько, указывайте каждую с новой строки.",
-        'links_prompt_stars': "⭐ Введите количество Stars для сделки (целое положительное число).\nНапример: 100",
-        'links_prompt_nft': "🔹 Введите ссылку(-и) на NFT Username/+888 в одном из форматов:\nhttps://... или t.me/...\nНапример:\nt.me/nft/PlushPepe-1\n\nЕсли у вас несколько NFT, указывайте каждую ссылку с новой строки",
-        'currency_prompt': "💱 Выбор валюты\n\nУкажите валюту для сделки:",
-        'amount_prompt': "💱 Валюта выбрана\n\nСумма сделки в {currency}:\n\nВведите сумму цифрами (напр. 1000)",
-        'details_input_card': "💳 Отправьте реквизиты единым сообщением:\n\nНомер банковской карты\nФИО владельца\n\nПример:\n1234 5678 9101 1121\nИванов Иван Иванович",
-        'details_input_crypto': "💎 Введите адрес вашего криптовалютного кошелька ({curr}). Например: 0x123...abc",
-        'details_input_ewallet': "💳 Введите номер вашего электронного кошелька ({curr}). Например: Qiwi +7912...",
-        'details_saved': "✅ Ваши реквизиты успешно сохранены!",
-        'profile_title': "👤 Ваш профиль\n\nПользователь: {username}\n🆔 ID пользователя: {uid}\n💰 Баланс: {balance}\n🏆 Успешных сделок: {deals}\n\nСмело создавайте или присоединяйтесь к новым сделкам с Secure Deal! 🚀",
-        'support_text': "📞 Мы всегда на связи!\n\nСвяжитесь с нашей службой поддержки для решения любых вопросов.",
-        'lang_change_title_ru': "🌐 Сменить язык\n\nВыберите предпочитаемый язык\n\nТекущий язык: Русский 🇷🇺",
-        'lang_change_title_en': "🌐 Change language\n\nChoose your preferred language\n\nCurrent: English 🇬🇧",
+        'links_prompt_gift': "🎁 *Введите ссылку(-и) на подарок(-и) в одном из форматов:*\nhttps://ссылка или t.me/ссылка\nНапример:\nt.me/nft/PlushPepe-1\n\n*Если у вас несколько подарков, указывайте каждую ссылку с новой строки*",
+        'links_prompt_channel': "📢 *Введите ссылку(-и) на канал(-ы) / чат(-ы) в формате t.me/ссылка*\nНапример:\nt.me/MyChannel\n\n*Если их несколько, указывайте каждую с новой строки.*",
+        'links_prompt_stars': "⭐ *Введите количество Stars для сделки (целое положительное число).*\nНапример: 100",
+        'links_prompt_nft': "🔹 *Введите ссылку(-и) на NFT Username/+888 в одном из форматов:*\nhttps://ссылка или t.me/ссылка\nНапример:\nt.me/nft/PlushPepe-1\n\n*Если у вас несколько NFT, указывайте каждую ссылку с новой строки*",
+        'currency_prompt': "💬 *Выберите валюту для сделки!*",
+        'amount_prompt': "💱 *Валюта выбрана*\n\n*Сумма сделки в {currency}:*\n\n*Введите сумму цифрами (напр. 1000)*",
+        'details_input_card': "💳 *Отправьте реквизиты единым сообщением:*\n\n*Номер банковской карты*\n*ФИО владельца*\n\nПример:\n1234 5678 9101 1121\nИванов Иван Иванович",
+        'details_input_crypto': "💎 *Введите адрес вашего криптовалютного кошелька ({curr}).* Например: 0x123...abc",
+        'details_input_ewallet': "💳 *Введите номер вашего электронного кошелька ({curr}).* Например: Qiwi +7912...",
+        'details_saved': "✅ *Ваши реквизиты успешно сохранены!*",
+        'profile_title': "*👤 Ваш профиль*\n\n*👋 Пользователь:* {username}\n*💰 Баланс:* {balance}\n*🏆 Успешных сделок:* {deals}\n\n🚀 *Осуществляйте новые сделки с Secure Deal — с нами вы можете быть уверены в надежности и честности каждой операции. ⚡️*",
+        'lang_change_title_ru': "🌐 *Сменить язык*\n\n*Выберите предпочитаемый язык*\n\nТекущий язык: Русский 🇷🇺",
+        'lang_change_title_en': "🌐 *Change language*\n\n*Choose your preferred language*\n\nCurrent: English 🇬🇧",
         'alert_need_details': "⚠ Для создания сделки необходимо добавить реквизиты.",
         'confirm_lang_ru': "Язык: Русский 🇷🇺",
         'confirm_lang_en': "Language: English 🇬🇧",
@@ -416,33 +485,32 @@ def t(lang, key, **kwargs):
         'pay_btn': "💸 Оплатить ({amount} {currency})"
     }
     en = {
-        'menu_title': "Secure Deal - Safe & Automatic\nYour trusted partner for safe deals!\n\nWhy choose us:\n\nSecurity guaranteed\nInstant payouts\n24/7 support\nEasy to use",
-        'btn_create_deal': "🌟 Create deal",
+        'menu_title': "👋 *Welcome!*\n\n🔐 *Reliable service for safe deals!*\n⚡ *Automated, fast and hassle-free!*\n\n*Now your deals are protected!* 🔒",
+        'btn_create_deal': "💼 Create deal",
         'btn_profile': "👤 My profile",
         'btn_details': "💳 My details",
         'btn_support': "📞 Support",
-        'btn_language': "🌐 Change language",
+        'btn_language': "🌍 Change language",
         'btn_back': "🔙 Back",
         'btn_cancel': "🚫 Cancel",
         'btn_add_details': "💳 Add details",
-        'details_menu_title': "💳 Details management\n\nChoose an action:",
-        'details_type_title': "💳 Details type\n\nChoose withdrawal method:",
+        'details_menu_title': "💳 *Details management*\n\n*Choose an action:*",
+        'details_type_title': "💳 *Details type*\n\n*Choose withdrawal method:*",
         'notice_title': "⚠ Must read!\n\n",
         'notice_default': "⚠ Must read!\n\nPlease read the info below to avoid issues.",
-        'links_prompt_gift': "🎁 Send link(s) to gift(s) in format:\nhttps://... or t.me/...\nExample:\nt.me/nft/PlushPepe-1\n\nFor multiple items, put each on a new line",
-        'links_prompt_channel': "📢 Send link(s) to channel(s)/chat(s) in t.me/... format\nExample:\nt.me/MyChannel\n\nFor multiple, one per line.",
-        'links_prompt_stars': "⭐ Enter Stars amount (positive integer).\nExample: 100",
-        'links_prompt_nft': "🔹 Send link(s) to NFT Username/+888 in:\nhttps://... or t.me/...\nExample:\nt.me/nft/PlushPepe-1\n\nFor multiple items, one per line",
-        'currency_prompt': "💱 Choose currency\n\nSelect the currency:",
-        'amount_prompt': "💱 Currency selected\n\nAmount in {currency}:\n\nEnter a number (e.g. 1000)",
-        'details_input_card': "💳 Send your details in one message:\n\nCard number\nFull name\n\nExample:\n1234 5678 9101 1121\nIvan Ivanov",
-        'details_input_crypto': "💎 Enter your wallet address ({curr}). Example: 0x123...abc",
-        'details_input_ewallet': "💳 Enter your e-wallet number ({curr}). Example: Qiwi +7912...",
-        'details_saved': "✅ Your details were saved successfully!",
+        'links_prompt_gift': "🎁 *Send link(s) to gift(s) in format:*\nhttps://link or t.me/link\nExample:\nt.me/nft/PlushPepe-1\n\n*For multiple items, put each on a new line*",
+        'links_prompt_channel': "📢 *Send link(s) to channel(s)/chat(s) in t.me/link format*\nExample:\nt.me/MyChannel\n\n*For multiple, one per line.*",
+        'links_prompt_stars': "⭐ *Enter Stars amount (positive integer).*\nExample: 100",
+        'links_prompt_nft': "🔹 *Send link(s) to NFT Username/+888 in:*\nhttps://link or t.me/link\nExample:\nt.me/nft/PlushPepe-1\n\n*For multiple items, one per line*",
+        'currency_prompt': "💬 *Choose a currency for the deal!*",
+        'amount_prompt': "💱 *Currency selected*\n\n*Amount in {currency}:*\n\n*Enter a number (e.g. 1000)*",
+        'details_input_card': "💳 *Send your details in one message:*\n\n*Card number*\n*Full name*\n\nExample:\n1234 5678 9101 1121\nIvan Ivanov",
+        'details_input_crypto': "💎 *Enter your wallet address ({curr}).* Example: 0x123...abc",
+        'details_input_ewallet': "💳 *Enter your e-wallet number ({curr}).* Example: Qiwi +7912...",
+        'details_saved': "✅ *Your details were saved successfully!*",
         'profile_title': "👤 Your profile\n\nUser: {username}\n🆔 User ID: {uid}\n💰 Balance: {balance}\n🏆 Successful deals: {deals}\n\nCreate or join new deals with Secure Deal! 🚀",
-        'support_text': "📞 We are always online!\n\nContact support for any questions.",
-        'lang_change_title_ru': "🌐 Change language\n\nChoose your preferred language\n\nCurrent: Russian 🇷🇺",
-        'lang_change_title_en': "🌐 Change language\n\nChoose your preferred language\n\nCurrent: English 🇬🇧",
+        'lang_change_title_ru': "🌐 *Change language*\n\n*Choose your preferred language*\n\nCurrent: Russian 🇷🇺",
+        'lang_change_title_en': "🌐 *Change language*\n\n*Choose your preferred language*\n\nCurrent: English 🇬🇧",
         'alert_need_details': "⚠ You need to add payout details to create a deal.",
         'confirm_lang_ru': "Language: Russian 🇷🇺",
         'confirm_lang_en': "Language: English 🇬🇧",
@@ -494,61 +562,105 @@ async def complete_deal_join(chat_id, user_id, user_username, deal_id):
             creator_details = get_user_details(creator_id)
             creator_rating = get_user_rating(creator_id)
             buyer_rating = get_user_rating(user_id)
+            
+            # Экранирование специальных символов
+            def escape_markdown_v2(text):
+                if not text:
+                    return text
+                
+                # Сначала убираем уже существующие экранирования, чтобы избежать двойного экранирования
+                text = text.replace('\\', '')
+                
+                escape_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}']
+                for char in escape_chars:
+                    text = text.replace(char, f'\\{char}')
+                return text
+            
             participant_display_name = f"@{user_username}" if user_username else f"ID{user_id}"
+            creator_display_name = f"@{creator_username}" if creator_username else f"ID{creator_id}"
+            
+            escaped_participant_name = escape_markdown_v2(participant_display_name)
+            escaped_creator_name = escape_markdown_v2(creator_display_name)
+            escaped_creator_details = escape_markdown_v2(creator_details)
+            escaped_item_links = escape_markdown_v2(item_links or 'Не указано')
+            
             lang = get_user_language(chat_id)
+            def escape_html(text):
+                if text is None:
+                    return ''
+                return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+            participant_link_html = f"<a href='tg://user?id={user_id}'>" + escape_html(participant_display_name) + "</a>"
+            creator_link_html = f"<a href='tg://user?id={creator_id}'>" + escape_html(creator_display_name) + "</a>"
+            item_links_html = escape_html(item_links or 'Не указано')
+            creator_details_html = escape_html(creator_details)
+
             if lang == 'en':
                 deal_info_text = (
-                    f"ℹ Deal info\n"
-                    f"#{deal_id}\n\n"
-                    f"👤 Buyer: <a href='tg://user?id={user_id}'>{participant_display_name}</a>\n"
-                    f"🏆 Buyer rating: {buyer_rating}\n\n"
-                    f"👤 Seller: <a href='tg://user?id={creator_id}'>{creator_username or 'User'}</a>\n"
-                    f"🏆 Seller rating: {creator_rating}\n\n"
-                    f"{get_deal_type_display_en(deal_type)}:\n"
-                    f"{item_links or 'Not specified'}\n\n"
-                    f"💳 Payment details:\n"
-                    f"Details: {creator_details}\n"
-                    f"💰 Amount: {amount} {currency}\n"
-                    f"💎 TON: {amount * 0.00375:.2f} TON\n"
-                    f"📝 Comment: {deal_id}\n\n"
-                    f"⚠ Make sure details are correct before paying."
+                    f"ℹ <b>Deal info</b>\n"
+                    f"<code>#{deal_id}</code>\n\n"
+                    f"👤 Buyer: {participant_link_html}\n"
+                    f"🏆 Buyer rating: <b>{buyer_rating}</b>\n\n"
+                    f"👤 Seller: {creator_link_html}\n"
+                    f"🏆 Seller rating: <b>{creator_rating}</b>\n\n"
+                    f"<b>{escape_html(get_deal_type_display_en(deal_type))}:</b>\n"
+                    f"{item_links_html}\n\n"
+                    f"💳 <b>Payment details:</b>\n"
+                    f"Details: {creator_details_html}\n"
+                    f"💰 Amount: <b>{amount} {currency}</b>\n"
+                    f"💎 TON: <b>{amount * 0.00375:.2f} TON</b>\n"
+                    f"📝 Comment: <code>{deal_id}</code>\n\n"
+                    f"⚠ <b>Make sure details are correct before paying!</b>"
                 )
             else:
                 deal_info_text = (
-                    f"ℹ Информация о сделке\n"
-                    f"#{deal_id}\n\n"
-                    f"👤 Покупатель: <a href='tg://user?id={user_id}'>{participant_display_name}</a>\n"
-                    f"🏆 Рейтинг покупателя: {buyer_rating}\n\n"
-                    f"👤 Продавец: <a href='tg://user?id={creator_id}'>{creator_username or 'Пользователь'}</a>\n"
-                    f"🏆 Рейтинг продавца: {creator_rating}\n\n"
-                    f"{get_deal_type_display(deal_type)}:\n"
-                    f"{item_links or 'Не указано'}\n\n"
-                    f"💳 Данные для оплаты:\n"
-                    f"Реквизиты: {creator_details}\n"
-                    f"💰 Сумма: {amount} {currency}\n"
-                    f"💎 TON: {amount * 0.00375:.2f} TON\n"
-                    f"📝 Комментарий: {deal_id}\n\n"
-                    f"⚠ Внимание! Убедитесь в правильности данных перед оплатой."
+                    f"ℹ <b>Информация о сделке</b>\n"
+                    f"<code>#{deal_id}</code>\n\n"
+                    f"👤 Покупатель: {participant_link_html}\n"
+                    f"🏆 Рейтинг покупателя: <b>{buyer_rating}</b>\n\n"
+                    f"👤 Продавец: {creator_link_html}\n"
+                    f"🏆 Рейтинг продавца: <b>{creator_rating}</b>\n\n"
+                    f"<b>{escape_html(get_deal_type_display(deal_type))}:</b>\n"
+                    f"{item_links_html}\n\n"
+                    f"💳 <b>Данные для оплаты:</b>\n"
+                    f"Реквизиты: {creator_details_html}\n"
+                    f"💰 Сумма: <b>{amount} {currency}</b>\n"
+                    f"💎 TON: <b>{amount * 0.00375:.2f} TON</b>\n"
+                    f"📝 Комментарий: <code>{deal_id}</code>\n\n"
+                    f"⚠ <b>Внимание! Убедитесь в правильности данных перед оплатой!</b>"
                 )
             
-            await bot.send_message(chat_id, deal_info_text, parse_mode='HTML', reply_markup=get_payment_keyboard(deal_id, amount, currency, user_id))
+            await send_video_without_sound(
+                chat_id, 
+                'assets/6.mp4', 
+                caption=deal_info_text, 
+                parse_mode='HTML', 
+                reply_markup=get_payment_keyboard(deal_id, amount, currency, user_id)
+            )
             
-            participant_link = f"<a href='tg://user?id={user_id}'>{participant_display_name}</a>"
+            participant_link = f"[{escaped_participant_name}](tg://user?id={user_id})"
             if lang == 'en':
                 seller_notification = (
-                    f"🔔 New participant {participant_link}\n\n"
-                    f"🏆 Completed deals: {get_user_rating(user_id)}\n\n"
-                    f"🔍 Check it is the same user.\n\n"
-                    f"📩 You will get further instructions after payment."
+                    f"👤 <b>New participant!</b> {participant_link_html}\n\n"
+                    f"🏆 <b>Completed deals:</b> {get_user_rating(user_id)}\n\n"
+                    f"🔍 <b>Check it is the same user.</b>\n\n"
+                    f"⏳ <b>You will get further instructions after payment.</b>"
                 )
             else:
                 seller_notification = (
-                    f"🔔 Новый участник сделки {participant_link}\n\n"
-                    f"🏆 Успешных сделок: {get_user_rating(user_id)}\n\n"
-                    f"🔍 Проверьте, что это тот же пользователь!\n\n"
-                    f"📩 После оплаты вы получите дальнейшие инструкции."
+                    f"👤 <b>Новый участник сделки!</b> {participant_link_html}\n\n"
+                    f"🏆 <b>Успешных сделок:</b> {get_user_rating(user_id)}\n\n"
+                    f"🔍 <b>Проверьте, что это тот же пользователь!</b>\n\n"
+                    f"⏳ <b>После оплаты вы получите дальнейшие инструкции.</b>"
                 )
-            await bot.send_message(creator_id, seller_notification, parse_mode='HTML', reply_markup=get_in_deal_keyboard(deal_id, 'in_progress'))
+            
+            await send_video_without_sound(
+                creator_id, 
+                'assets/6.mp4', 
+                caption=seller_notification, 
+                parse_mode='HTML', 
+                reply_markup=get_in_deal_keyboard(deal_id, 'in_progress')
+            )
         else:
             logger.error(f"Deal {deal_id} not found for join")
             await bot.send_message(chat_id, "😕 Сделка не найдена.")
@@ -745,21 +857,21 @@ async def handle_join_deal(message, deal_id):
             )
             
             await bot.send_message(GROUP_ID, notification_text, message_thread_id=TOPIC_ID, parse_mode='HTML')
-            await bot.send_message(creator_id, notification_text, parse_mode='HTML', reply_markup=get_main_menu_keyboard())
+            await send_video_without_sound(creator_id, 'assets/1.mp4', caption=notification_text, parse_mode='HTML', reply_markup=get_main_menu_keyboard())
             
             if deal[3]:
-                await bot.send_message(deal[3], notification_text, parse_mode='HTML', reply_markup=get_main_menu_keyboard())
+                await send_video_without_sound(deal[3], 'assets/1.mp4', caption=notification_text, parse_mode='HTML', reply_markup=get_main_menu_keyboard())
             
             deal_ref = db.collection('deals').document(str(deal_id))
             deal_ref.update({'status': 'expired'})
-            await bot.send_message(message.chat.id, "⏰ Эта сделка истекла и больше не активна.", reply_markup=get_main_menu_keyboard())
+            await send_video_without_sound(message.chat.id, 'assets/1.mp4', caption="⏰ Эта сделка истекла и больше не активна.", reply_markup=get_main_menu_keyboard())
             return
 
         if not check_user_details(message.from_user.id):
             await bot.set_state(message.from_user.id, UserStates.AwaitingDetailsInput, message.chat.id)
             async with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
                 data['pending_deal_id'] = deal_id
-            await bot.send_message(message.chat.id, "⚠ Для продолжения сделки необходимо добавить реквизиты.", reply_markup=get_add_details_keyboard())
+            await send_video_without_sound(message.chat.id, 'assets/1.mp4', caption="⚠ Для продолжения сделки необходимо добавить реквизиты.", reply_markup=get_add_details_keyboard())
             return
 
         if deal[1] == message.from_user.id:
@@ -779,40 +891,43 @@ async def show_main_menu(chat_id, user_name):
     try:
         await bot.delete_state(chat_id, chat_id)
         lang = get_user_language(chat_id)
-        if lang == 'en':
-            menu_text = (
-                f"Secure Deal - Safe & Automatic\n"
-                f"Your trusted partner for safe deals!\n\n"
-                f"Why choose us:\n\n"
-                f"Security guaranteed\n"
-                f"Instant payouts\n"
-                f"24/7 support\n"
-                f"Easy to use"
-            )
-        else:
-            menu_text = (
-                f"Secure Deal - Safe & Automatic\n"
-                f"Ваш надежный партнер в безопасных сделках!\n\n"
-                f"Почему клиенты выбирают нас:\n\n"
-                f"Гарантия безопасности - все сделки защищены\n"
-                f"Мгновенные выплаты - в любой валюте\n"
-                f"Круглосуточная поддержка - решаем любые вопросы\n"
-                f"Простота использования - интуитивно понятный интерфейс"
-            )
-        with open('assets/photo.jpg', 'rb') as photo:
-            await bot.send_photo(chat_id, photo, caption=menu_text, reply_markup=get_main_menu_keyboard(lang), parse_mode='HTML')
+        menu_text = t(lang, 'menu_title')
+        
+        await send_video_without_sound(chat_id, 'assets/1.mp4', caption=menu_text, reply_markup=get_main_menu_keyboard(lang), parse_mode='Markdown')
+        
         logger.info(f"Displayed main menu for chat {chat_id}")
     except Exception as e:
         logger.error(f"Error in show_main_menu for chat {chat_id}: {e}")
         await bot.send_message(chat_id, "⚠ Ошибка при отображении главного меню. Обратитесь в поддержку @SecureHomeSupport.")
 
 NOTICE = "⚠ Обязательно к прочтению!\n\n"
-GIFT_NOTICE_BODY = "Проверка получения подарков происходит автоматически — только если вы отправляете подарки на аккаунт @SecureHomeSupport\n\nЕсли же вы отправите подарки напрямую покупателю, то проверка НЕ СРАБОТАЕТ, и\n • Подарки будут потеряны 😔\n • Вывести средства станет невозможно 🚫\n • Сделка будет считаться несостоявшейся и вы потеряете свои подарки и деньги 💸\n\nЧтобы успешно завершить сделку и получить средства — всегда отправляйте подарки на аккаунт @SecureHomeSupport для проверки."
-CHANNEL_NOTICE_BODY = "Проверка передачи прав на канал/чат происходит автоматически.\n\nВажно: После оплаты покупатель получает доступ к каналу/чату. Только после того, как вы успешно передадите права на аккаунт @SecureHomeSupport и наш бот это подтвердит, средства будут зачислены на ваш счет.\nПосле подтверждения оплаты бот предоставит дальнейшие инструкции по передаче прав."
-STARS_NOTICE_BODY = "Проверка получения Stars происходит автоматически.\n\nВажно: Перевод Stars должен быть осуществлен на аккаунт @SecureHomeSupport, который бот предоставит после оплаты. Это гарантирует безопасность сделки.\nНе переводите Stars напрямую покупателю. После подтверждения оплаты, бот выдаст вам точные инструкции."
-NFT_NOTICE_BODY = "Проверка получения NFT происходит автоматически — только если вы отправляете NFT на аккаунт @SecureHomeSupport\n\nЕсли же вы отправите NFT напрямую покупателю, то проверка НЕ СРАБОТАЕТ, и\n • NFT будет утерян 😔\n • Вывести средства станет невозможно 🚫\n • Сделка будет считаться несостоявшейся и вы потеряете свой NFT и деньги 💸\n\nЧтобы успешно завершить сделку и получить средства — всегда отправляйте NFT на аккаунт @SecureHomeSupport для проверки."
+GIFT_NOTICE_BODY = (
+    "*‼️ Важная информация!*\n\n"
+    "*Проверка получения подарков осуществляется автоматически только при отправке на аккаунт @GiftGuarantHelp.*\n\n"
+    "*Если NFT username/+888 отправлены напрямую покупателю:*\n"
+    "• Они будут утеряны 😔\n"
+    "• Сделка будет считаться несостоявшейся, что приведет к потери username/+888 и денежных средств 💸\n\n"
+    "Для успешного завершения сделки и получения средств обязательно отправляйте подарки на аккаунт @GiftGuarant для проверки."
+)
+CHANNEL_NOTICE_BODY = (
+    "*‼️ Важная информация!*\n\n"
+    "*Проверка получения подарков осуществляется автоматически только при отправке на аккаунт @GiftGuarantHelp.*\n\n"
+    "*Если Каналы/Чаты отправлены напрямую покупателю:*\n"
+    "• Они будут утеряны 😔\n"
+    "• Сделка будет считаться несостоявшейся, что приведет к потери Каналов/Чатов и денежных средств 💸\n\n"
+    "Для успешного завершения сделки и получения средств обязательно отправляйте подарки на аккаунт @GiftGuarant для проверки."
+)
+STARS_NOTICE_BODY = (
+    "*‼️ Важная информация!*\n\n"
+    "*Проверка получения подарков осуществляется автоматически только при отправке на аккаунт @GiftGuarantHelp.*\n\n"
+    "*Если звёзды отправлены напрямую покупателю:*\n"
+    "• Они будут утеряны 😔\n"
+    "• Сделка будет считаться несостоявшейся, что приведет к потери звёзд и денежных средств 💸\n\n"
+    "Для успешного завершения сделки и получения средств обязательно отправляйте подарки на аккаунт @GiftGuarant для проверки."
+)
+NFT_NOTICE_BODY = GIFT_NOTICE_BODY
 NOTICES = {
-    'gift': NOTICE + GIFT_NOTICE_BODY,
+    'gift': GIFT_NOTICE_BODY,
     'channel': NOTICE + CHANNEL_NOTICE_BODY,
     'stars': NOTICE + STARS_NOTICE_BODY,
     'nft': NFT_NOTICE_BODY,
@@ -827,39 +942,36 @@ async def handle_callback_query(call):
     
     try:
         if call.data == "main_menu":
-            try:
-                await bot.delete_message(chat_id, message_id)
-            except:
-                pass
-            await show_main_menu(chat_id, call.from_user.first_name)
+            # Меняем текущее сообщение на главное меню
+            lang = get_user_language(chat_id)
+            menu_text = t(lang, 'menu_title')
+            edited = await edit_video_message(chat_id, message_id, video_path='assets/1.mp4', caption=menu_text, reply_markup=get_main_menu_keyboard(lang), parse_mode='Markdown')
+            if not edited:
+                await show_main_menu(chat_id, call.from_user.first_name)
         elif call.data == "create_deal":
             if not check_user_details(call.from_user.id):
                 await bot.answer_callback_query(call.id, "⚠ Для создания сделки необходимо добавить реквизиты.", show_alert=True)
-                await bot.send_message(chat_id, "⚠ Для создания сделки необходимо добавить реквизиты.", reply_markup=get_add_details_keyboard())
+                await send_video_without_sound(chat_id, 'assets/1.mp4', caption="⚠ Для создания сделки необходимо добавить реквизиты.", reply_markup=get_add_details_keyboard())
                 return
             await bot.set_state(call.from_user.id, UserStates.AwaitingDealType, chat_id)
             async with bot.retrieve_data(call.from_user.id, chat_id) as data:
                 data['deal_data'] = {}
-            try:
-                await bot.delete_message(chat_id, message_id)
-            except:
-                pass
-            text = "🌟 Создание сделки\n\nВыберите тип сделки"
-            with open('assets/photo.jpg', 'rb') as photo:
-                await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_deal_type_keyboard())
+            text = "💭 *Выберите тип сделки!*"
+            if not await edit_video_message(chat_id, message_id, video_path='assets/2.mp4', caption=text, reply_markup=get_deal_type_keyboard(), parse_mode='Markdown'):
+                await send_video_without_sound(chat_id, 'assets/2.mp4', caption=text, reply_markup=get_deal_type_keyboard(), parse_mode='Markdown')
         elif call.data.startswith("deal_type_"):
             deal_type = call.data.split('_')[-1]
+            # Гарантируем наличие deal_data
             async with bot.retrieve_data(call.from_user.id, chat_id) as data:
+                if 'deal_data' not in data or not isinstance(data.get('deal_data'), dict):
+                    data['deal_data'] = {}
                 data['deal_data']['type'] = deal_type
             await bot.set_state(call.from_user.id, UserStates.AwaitingNotice, chat_id)
             async with bot.retrieve_data(call.from_user.id, chat_id) as data:
                 data['deal_type'] = deal_type
             notice_text = NOTICES.get(deal_type, "⚠ Обязательно к прочтению!\n\nПожалуйста, ознакомьтесь с информацией ниже, чтобы избежать проблем.")
-            try:
-                await bot.delete_message(chat_id, message_id)
-            except:
-                pass
-            await bot.send_message(chat_id, text=notice_text, reply_markup=get_notice_keyboard(deal_type, get_user_language(chat_id)))
+            if not await edit_video_message(chat_id, message_id, video_path='assets/1.mp4', caption=notice_text, reply_markup=get_notice_keyboard(deal_type, get_user_language(chat_id)), parse_mode='Markdown'):
+                await send_video_without_sound(chat_id, 'assets/1.mp4', caption=notice_text, reply_markup=get_notice_keyboard(deal_type, get_user_language(chat_id)), parse_mode='Markdown')
         elif call.data.startswith("notice_read_"):
             deal_type = call.data.split('_')[-1]
             await bot.set_state(call.from_user.id, UserStates.AwaitingLinks, chat_id)
@@ -873,42 +985,34 @@ async def handle_callback_query(call):
                 'nft': t(lang_cur, 'links_prompt_nft')
             }
             link_text = link_text_map.get(deal_type, t(lang_cur, 'links_prompt_gift'))
-            try:
-                await bot.delete_message(chat_id, message_id)
-            except:
-                pass
-            sent_msg = await bot.send_message(chat_id, text=link_text, reply_markup=get_links_keyboard(deal_type, get_user_language(chat_id)))
-            async with bot.retrieve_data(call.from_user.id, chat_id) as data:
-                data['prompt_message_id'] = sent_msg.message_id
+            if not await edit_video_message(chat_id, message_id, video_path='assets/3.mp4', caption=link_text, reply_markup=get_links_keyboard(deal_type, get_user_language(chat_id)), parse_mode='Markdown'):
+                sent_msg = await send_video_without_sound(chat_id, 'assets/3.mp4', caption=link_text, reply_markup=get_links_keyboard(deal_type, get_user_language(chat_id)), parse_mode='Markdown')
+                async with bot.retrieve_data(call.from_user.id, chat_id) as data:
+                    data['prompt_message_id'] = sent_msg.message_id
+            else:
+                # Сохраняем текущий message_id как промпт, если редактирование прошло успешно
+                async with bot.retrieve_data(call.from_user.id, chat_id) as data:
+                    data['prompt_message_id'] = message_id
         elif call.data.startswith("currency_"):
             async with bot.retrieve_data(call.from_user.id, chat_id) as data:
                 currency = call.data.split('_')[-1]
                 data['deal_data']['currency'] = currency
             await bot.set_state(call.from_user.id, UserStates.AwaitingAmount, chat_id)
             text = t(get_user_language(chat_id), 'amount_prompt', currency=currency)
-            try:
-                await bot.delete_message(chat_id, message_id)
-            except:
-                pass
-            with open('assets/photo.jpg', 'rb') as photo:
-                sent_msg = await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_cancel_keyboard(get_user_language(chat_id)))
-            async with bot.retrieve_data(call.from_user.id, chat_id) as data:
-                data['prompt_message_id'] = sent_msg.message_id
+            if not await edit_video_message(chat_id, message_id, video_path='assets/3.mp4', caption=text, reply_markup=get_cancel_keyboard(get_user_language(chat_id)), parse_mode='Markdown'):
+                sent_msg = await send_video_without_sound(chat_id, 'assets/3.mp4', caption=text, reply_markup=get_cancel_keyboard(get_user_language(chat_id)), parse_mode='Markdown')
+                async with bot.retrieve_data(call.from_user.id, chat_id) as data:
+                    data['prompt_message_id'] = sent_msg.message_id
+            else:
+                async with bot.retrieve_data(call.from_user.id, chat_id) as data:
+                    data['prompt_message_id'] = message_id
         elif call.data == "my_details":
-            try:
-                await bot.delete_message(chat_id, message_id)
-            except:
-                pass
-            with open('assets/photo.jpg', 'rb') as photo:
-                await bot.send_photo(chat_id, photo, caption=t(get_user_language(chat_id), 'details_menu_title'), reply_markup=get_details_menu_keyboard(get_user_language(chat_id)))
+            if not await edit_video_message(chat_id, message_id, video_path='assets/7.mp4', caption=t(get_user_language(chat_id), 'details_menu_title'), reply_markup=get_details_menu_keyboard(get_user_language(chat_id)), parse_mode='Markdown'):
+                await send_video_without_sound(chat_id, 'assets/7.mp4', caption=t(get_user_language(chat_id), 'details_menu_title'), reply_markup=get_details_menu_keyboard(get_user_language(chat_id)), parse_mode='Markdown')
         elif call.data == "add_details":
             await bot.set_state(call.from_user.id, UserStates.AwaitingDetailsType, chat_id)
-            try:
-                await bot.delete_message(chat_id, message_id)
-            except:
-                pass
-            with open('assets/photo.jpg', 'rb') as photo:
-                await bot.send_photo(chat_id, photo, caption=t(get_user_language(chat_id), 'details_type_title'), reply_markup=get_details_type_keyboard())
+            if not await edit_video_message(chat_id, message_id, video_path='assets/7.mp4', caption=t(get_user_language(chat_id), 'details_type_title'), reply_markup=get_details_type_keyboard(), parse_mode='Markdown'):
+                await send_video_without_sound(chat_id, 'assets/7.mp4', caption=t(get_user_language(chat_id), 'details_type_title'), reply_markup=get_details_type_keyboard(), parse_mode='Markdown')
         elif call.data.startswith("details_type_"):
             async with bot.retrieve_data(call.from_user.id, chat_id) as data:
                 details_type = call.data.split('_')[2]
@@ -922,14 +1026,15 @@ async def handle_callback_query(call):
                 input_prompt = t(lang_cur, 'details_input_crypto', curr=details_currency)
             elif details_type == 'ewallet':
                 input_prompt = t(lang_cur, 'details_input_ewallet', curr=details_currency)
-            try:
-                await bot.delete_message(chat_id, message_id)
-            except:
-                pass
-            sent_msg = await bot.send_message(chat_id, text=input_prompt, reply_markup=get_cancel_keyboard())
-            async with bot.retrieve_data(call.from_user.id, chat_id) as data:
-                data['prompt_message_id'] = sent_msg.message_id
-                logger.info(f"Set prompt_message_id for user {call.from_user.id}: {sent_msg.message_id}")
+            if not await edit_video_message(chat_id, message_id, video_path='assets/7.mp4', caption=input_prompt, reply_markup=get_cancel_keyboard(), parse_mode='Markdown'):
+                sent_msg = await send_video_without_sound(chat_id, 'assets/7.mp4', caption=input_prompt, reply_markup=get_cancel_keyboard(), parse_mode='Markdown')
+                async with bot.retrieve_data(call.from_user.id, chat_id) as data:
+                    data['prompt_message_id'] = sent_msg.message_id
+                    logger.info(f"Set prompt_message_id for user {call.from_user.id}: {sent_msg.message_id}")
+            else:
+                async with bot.retrieve_data(call.from_user.id, chat_id) as data:
+                    data['prompt_message_id'] = message_id
+                    logger.info(f"Set prompt_message_id for user {call.from_user.id}: {message_id}")
         elif call.data == "view_details":
             details = get_user_details(call.from_user.id)
             await bot.answer_callback_query(call.id, f"💳 Ваши реквизиты: {details}", show_alert=True)
@@ -954,33 +1059,38 @@ async def handle_callback_query(call):
                         'is_banned_from_admin': 0
                     })
                 profile = profile_ref.get().to_dict()
-                username = profile['username']
-                balance = profile['balance']
-                successful_deals = profile['successful_deals']
+                username = profile.get('username', 'Без имени')
+                balance = profile.get('balance', 0.0)
+                successful_deals = profile.get('successful_deals', 0)
+                
                 admin_ids = get_admin_ids()
                 balance_text = "∞" if call.from_user.id in admin_ids else f"{balance:.2f}"
+                
+                # Экранируем специальные символы; добавляем @ к username
+                display_username = f"@{username}" if username else 'Без имени'
+                escaped_username = escape_markdown_v2(display_username)
+                
                 text = (
-                    "👤 Ваш профиль\n\n"
-                    f"Пользователь: {username}\n"
-                    f"🆔 ID пользователя: {call.from_user.id}\n"
-                    f"💰 Баланс: {balance_text}\n"
-                    f"🏆 Успешных сделок: {successful_deals}\n\n"
-                    "Смело создавайте или присоединяйтесь к новым сделкам с Secure Deal! 🚀"
+                    "*👤 Ваш профиль*\n\n"
+                    f"*👋 Пользователь:* {escaped_username}\n"
+                    f"*💰 Баланс:* `{balance_text}`\n"
+                    f"*🏆 Успешных сделок:* `{successful_deals}`\n\n"
+                    f"🚀 *Осуществляйте новые сделки с Secure Deal — с нами вы можете быть уверены в надежности и честности каждой операции. ⚡️*"
                 )
-                try:
-                    await bot.delete_message(chat_id, message_id)
-                except:
-                    pass
-                with open('assets/photo.jpg', 'rb') as photo:
-                    await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_profile_keyboard(get_user_language(chat_id)))
+                
+                # Редактируем текущее сообщение вместо удаления
+                if not await edit_video_message(chat_id, message_id, video_path='assets/1.mp4', caption=text, reply_markup=get_profile_keyboard(get_user_language(chat_id)), parse_mode='Markdown'):
+                    await send_video_without_sound(
+                        chat_id, 
+                        'assets/1.mp4', 
+                        caption=text, 
+                        reply_markup=get_profile_keyboard(get_user_language(chat_id)), 
+                        parse_mode='Markdown'
+                    )
             except Exception as e:
                 logger.error(f"Error in my_profile for user {call.from_user.id}: {e}")
                 await bot.send_message(chat_id, "⚠ Ошибка при отображении профиля. Обратитесь в поддержку @SecureHomeSupport.")
         elif call.data == "change_language":
-            try:
-                await bot.delete_message(chat_id, message_id)
-            except:
-                pass
             current_lang = get_user_language(call.from_user.id)
             if current_lang == 'en':
                 text = (
@@ -994,32 +1104,32 @@ async def handle_callback_query(call):
                     "Выберите предпочитаемый язык\n\n"
                     "Текущий язык: Русский 🇷🇺"
                 )
-            with open('assets/photo.jpg', 'rb') as photo:
-                await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_language_keyboard(get_user_language(chat_id)))
+            if not await edit_video_message(chat_id, message_id, video_path='assets/1.mp4', caption=text, reply_markup=get_language_keyboard(get_user_language(chat_id))):
+                await send_video_without_sound(chat_id, 'assets/1.mp4', caption=text, reply_markup=get_language_keyboard(get_user_language(chat_id)))
         elif call.data == "lang_ru":
             try:
                 db.collection('user_profile').document(str(call.from_user.id)).update({'language': 'ru'})
             except Exception:
                 pass
+            # Инвалидируем кэш языка, чтобы не "откатывался"
+            _LANG_CACHE['map'].pop(call.from_user.id, None)
             await bot.answer_callback_query(call.id, "Язык: Русский 🇷🇺", show_alert=False)
-            await show_main_menu(chat_id, call.from_user.first_name)
+            # Мгновенно обновить текущее сообщение на главное меню с новым языком
+            lang = 'ru'
+            menu_text = t(lang, 'menu_title')
+            if not await edit_video_message(chat_id, message_id, video_path='assets/1.mp4', caption=menu_text, reply_markup=get_main_menu_keyboard(lang), parse_mode='Markdown'):
+                await show_main_menu(chat_id, call.from_user.first_name)
         elif call.data == "lang_en":
             try:
                 db.collection('user_profile').document(str(call.from_user.id)).update({'language': 'en'})
             except Exception:
                 pass
+            _LANG_CACHE['map'].pop(call.from_user.id, None)
             await bot.answer_callback_query(call.id, "Language: English 🇬🇧", show_alert=False)
-            await show_main_menu(chat_id, call.from_user.first_name)
-        elif call.data == "support":
-            try:
-                await bot.delete_message(chat_id, message_id)
-            except:
-                pass
-            text = (
-                "📞 Мы всегда на связи!\n\n"
-                "Свяжитесь с нашей службой поддержки для решения любых вопросов."
-            )
-            await bot.send_message(chat_id, text, reply_markup=get_support_keyboard())
+            lang = 'en'
+            menu_text = t(lang, 'menu_title')
+            if not await edit_video_message(chat_id, message_id, video_path='assets/1.mp4', caption=menu_text, reply_markup=get_main_menu_keyboard(lang), parse_mode='Markdown'):
+                await show_main_menu(chat_id, call.from_user.first_name)
         elif call.data.startswith("pay_from_balance_"):
             deal_id = call.data.split('_')[-1]
             await handle_pay_from_balance(chat_id, call.from_user.id, deal_id, message_id)
@@ -1063,8 +1173,14 @@ async def handle_pay_from_balance(chat_id, user_id, deal_id, message_id):
     try:
         deal_ref = db.collection('deals').document(str(deal_id))
         deal = deal_ref.get().to_dict()
-        if not deal or deal['participant_id'] != user_id:
-            await bot.send_message(chat_id, "😕 Сделка не найдена или вы не являетесь ее участником.", reply_markup=get_in_deal_keyboard(deal_id, 'in_progress'))
+        
+        # Убираем проверку статуса сделки, так как она может быть в статусе 'in_progress'
+        if not deal:
+            await send_video_without_sound(chat_id, 'assets/1.mp4', caption="😕 Сделка не найдена.", reply_markup=get_in_deal_keyboard(deal_id, 'in_progress'))
+            return
+        
+        if deal['participant_id'] != user_id:
+            await send_video_without_sound(chat_id, 'assets/1.mp4', caption="😕 Вы не являетесь участником этой сделки.", reply_markup=get_in_deal_keyboard(deal_id, 'in_progress'))
             return
 
         amount = deal['amount']
@@ -1073,11 +1189,24 @@ async def handle_pay_from_balance(chat_id, user_id, deal_id, message_id):
         creator_username = deal['creator_username']
         deal_type = deal['deal_type']
         
+        # Функция экранирования для Markdown V2
+        def escape_markdown_v2(text):
+            if not text:
+                return text
+            
+            # Сначала убираем уже существующие экранирования, чтобы избежать двойного экранирования
+            text = text.replace('\\', '')
+            
+            escape_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}']
+            for char in escape_chars:
+                text = text.replace(char, f'\\{char}')
+            return text
+        
         admin_ids = get_admin_ids()
         if user_id not in admin_ids:
             user_balance = get_user_balance(user_id)
             if user_balance < amount and currency not in ['Stars', 'TON']:
-                await bot.send_message(chat_id, "⚠ У вас недостаточно средств на балансе.", reply_markup=get_in_deal_keyboard(deal_id, 'in_progress'))
+                await send_video_without_sound(chat_id, 'assets/1.mp4', caption="⚠ *У вас недостаточно средств на балансе*", parse_mode='Markdown', reply_markup=get_in_deal_keyboard(deal_id, 'in_progress'))
                 return
             update_user_balance(user_id, -amount)
 
@@ -1089,22 +1218,43 @@ async def handle_pay_from_balance(chat_id, user_id, deal_id, message_id):
         except:
             pass
 
-        await bot.send_message(chat_id, f"✅ Вы успешно оплатили сделку #{deal_id}. Ожидайте, пока продавец передаст товар на проверку @SecureHomeSupport.", reply_markup=get_paid_keyboard(deal_id))
+        # Экранируем специальные символы
+        escaped_deal_id = escape_markdown_v2(deal_id)
+        escaped_amount = escape_markdown_v2(str(amount))
+        escaped_currency = escape_markdown_v2(currency)
+        
+        await send_video_without_sound(
+            chat_id, 
+            'assets/1.mp4', 
+            caption=f"✅ <b>Вы успешно оплатили сделку</b> <code>#{escaped_deal_id}</code>. <b>Ожидайте, пока продавец передаст товар на проверку @SecureHomeSupport</b>", 
+            reply_markup=get_paid_keyboard(deal_id), 
+            parse_mode='HTML'
+        )
         
         participant_username = get_username_by_id(user_id)
-        participant_link = f"<a href='tg://user?id={user_id}'>@{participant_username}</a>" if participant_username else f"<a href='tg://user?id={user_id}'>ID{user_id}</a>"
+        participant_display_name = f"@{participant_username}" if participant_username else f"ID{user_id}"
+        participant_link_html = f"<a href='tg://user?id={user_id}'>" + (participant_display_name) + "</a>"
+
         item_name = get_transfer_item_name(deal_type)
-        
-        seller_message = (
-            f"💸 Сделка оплачена!\n\n"
-            f"👤 Покупатель: {participant_link} оплатил {amount} {currency}\n\n"
-            f"📦 Пожалуйста, передайте {item_name} поддержке @SecureHomeSupport для проверки.\n"
-            f"💰 Средства в размере {amount} {currency} будут зачислены на ваш баланс сразу после подтверждения @SecureHomeSupport."
+
+        seller_message_html = (
+            f"💸 <b>Сделка оплачена!</b>\n\n"
+            f"👤 <b>Покупатель</b>: {participant_link_html} <b>оплатил</b> <code>{escaped_amount} {escaped_currency}</code>\n\n"
+            f"📦 <b>Пожалуйста, передайте {item_name} поддержке @SecureHomeSupport для проверки.</b>\n"
+            f"💰 <b>Средства в размере</b> <code>{escaped_amount} {escaped_currency}</code> <b>будут зачислены на ваш баланс сразу после подтверждения @SecureHomeSupport.</b>\n"
         )
+
         keyboard = telebot.types.InlineKeyboardMarkup()
         transfer_btn = telebot.types.InlineKeyboardButton(f"✅ Я передал {item_name}", callback_data=f"complete_deal_{deal_id}")
         keyboard.add(transfer_btn)
-        await bot.send_message(creator_id, seller_message, reply_markup=keyboard, parse_mode='HTML')
+
+        await send_video_without_sound(
+            creator_id, 
+            'assets/1.mp4', 
+            caption=seller_message_html, 
+            reply_markup=keyboard, 
+            parse_mode='HTML'
+        )
     except Exception as e:
         logger.error(f"Error in handle_pay_from_balance for deal {deal_id}: {e}")
         await bot.send_message(chat_id, "⚠ Ошибка при оплате сделки. Обратитесь в поддержку @SecureHomeSupport.")
@@ -1131,7 +1281,7 @@ async def handle_complete_deal(chat_id, user_id, deal_id, message_id):
         deal_id, creator_id, creator_username, participant_id, participant_username, deal_type, item_links, currency, amount, status, creation_date = deal
         
         if status != 'paid':
-            await bot.send_message(chat_id, "⚠ Эта сделка еще не была оплачена.", reply_markup=get_in_deal_keyboard(deal_id, status))
+            await send_video_without_sound(chat_id, 'assets/1.mp4', caption="⚠ Эта сделка еще не была оплачена.", reply_markup=get_in_deal_keyboard(deal_id, status))
             return
 
         update_user_balance(creator_id, amount)
@@ -1160,8 +1310,8 @@ async def handle_complete_deal(chat_id, user_id, deal_id, message_id):
         except:
             pass
         
-        await bot.send_message(creator_id, "🎉 Сделка успешно завершена!")
-        await bot.send_message(participant_id, "🎉 Сделка успешно завершена!")
+        await bot.send_message(creator_id, "*🎉 Сделка успешно завершена!*", parse_mode='Markdown')
+        await bot.send_message(participant_id, "*🎉 Сделка успешно завершена!*", parse_mode='Markdown')
     except Exception as e:
         logger.error(f"Error in handle_complete_deal for deal {deal_id}: {e}")
         await bot.send_message(chat_id, "⚠ Ошибка при завершении сделки. Обратитесь в поддержку @SecureHomeSupport.")
@@ -1200,12 +1350,12 @@ async def handle_leave_deal(chat_id, user_id, deal_id):
         )
         
         await bot.send_message(GROUP_ID, message_text, message_thread_id=TOPIC_ID, parse_mode='HTML')
-        await bot.send_message(creator_id, message_text, parse_mode='HTML', reply_markup=get_main_menu_keyboard())
+        await send_video_without_sound(creator_id, 'assets/1.mp4', caption=message_text, parse_mode='HTML', reply_markup=get_main_menu_keyboard())
 
         if participant_id:
-            await bot.send_message(participant_id, message_text, parse_mode='HTML', reply_markup=get_main_menu_keyboard())
+            await send_video_without_sound(participant_id, 'assets/1.mp4', caption=message_text, parse_mode='HTML', reply_markup=get_main_menu_keyboard())
         
-        await bot.send_message(chat_id, "✅ Вы успешно покинули сделку.", reply_markup=get_main_menu_keyboard())
+        await send_video_without_sound(chat_id, 'assets/1.mp4', caption="✅ Вы успешно покинули сделку.", reply_markup=get_main_menu_keyboard())
     except Exception as e:
         logger.error(f"Error in handle_leave_deal for deal {deal_id}: {e}")
         await bot.send_message(chat_id, "⚠ Ошибка при выходе из сделки. Обратитесь в поддержку @SecureHomeSupport.")
@@ -1238,8 +1388,7 @@ async def handle_links(message):
         except Exception as e:
             logger.error(f"Error deleting messages in handle_links for user {user_id}: {e}")
         text = t(get_user_language(chat_id), 'currency_prompt')
-        with open('assets/photo.jpg', 'rb') as photo:
-            await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_currency_keyboard(get_user_language(chat_id)))
+        await send_video_without_sound(chat_id, 'assets/4.mp4', caption=text, reply_markup=get_currency_keyboard(get_user_language(chat_id)), parse_mode='Markdown')
     except Exception as e:
         logger.error(f"Error in handle_links for user {user_id}: {e}")
         await bot.send_message(chat_id, "⚠ Ошибка при обработке ссылок. Обратитесь в поддержку @SecureHomeSupport.")
@@ -1254,8 +1403,7 @@ async def handle_amount(message):
             prompt_message_id = data.get('prompt_message_id')
         if not prompt_message_id:
             logger.warning(f"No prompt_message_id in state for user {user_id}")
-            await show_main_menu(chat_id, message.from_user.first_name)
-            return
+            # Не уходим в меню. Просто сформируем сделку и отправим результат отдельным сообщением
         try:
             amount = float(message.text)
             if amount <= 0:
@@ -1266,11 +1414,22 @@ async def handle_amount(message):
                 data['prompt_message_id'] = sent_msg.message_id
             return
             
+        # Удаляем сообщение пользователя с суммой
         try:
-            await bot.delete_message(chat_id, prompt_message_id)
             await bot.delete_message(chat_id, message.message_id)
+        except Exception:
+            pass
+        # Пытаемся отредактировать промпт под сумму на итог сделки
+        try:
+            preview_text = (
+                f"🎉 *Сделка создаётся...*\n\n"
+                f"💰 *Сумма:* `{amount}`\n"
+                f"⏳ *Момент...*"
+            )
+            if prompt_message_id:
+                await edit_video_message(chat_id, prompt_message_id, video_path='assets/5.mp4', caption=preview_text, parse_mode='Markdown')
         except Exception as e:
-            logger.error(f"Error deleting messages in handle_amount for user {user_id}: {e}")
+            logger.error(f"Error editing prompt in handle_amount for user {user_id}: {e}")
             
         async with bot.retrieve_data(user_id, chat_id) as data:
             data['deal_data']['amount'] = amount
@@ -1289,16 +1448,23 @@ async def handle_amount(message):
         })
         logger.info(f"Created deal {deal_id} for user {user_id}")
 
-        join_link = f"https://t.me/{BOT_USERNAME}?start=deal_{deal_id}"
+        join_link = generate_join_link(deal_id)
         text = (
-            f"🎉 Сделка создана!\n\n"
-            f"🆔 ID сделки: {deal_id}\n"
-            f"💰 Сумма: {deal_data['amount']} {deal_data['currency']}\n"
-            f"🔗 Ссылка для участника:\n{join_link}\n\n"
-            f"📦 После создания сделки передайте товар/подарок поддержке @SecureHomeSupport для проверки."
+            f"🎉 *Сделка создана!*\n\n"
+            f"🆔 *ID сделки:* `{deal_id}`\n"
+            f"💰 *Сумма:* `{deal_data['amount']} {deal_data['currency']}`\n"
+            f"🔗 *Ссылка для участника:*\n`{join_link}`\n\n"
+            f"⏳ *Чтобы присоединиться к сделке, отправьте это сообщение покупателю!*"
         )
-        with open('assets/photo.jpg', 'rb') as photo:
-            await bot.send_photo(chat_id, photo, caption=text, reply_markup=get_in_deal_keyboard(deal_id, 'waiting_for_participant'))
+        # Пробуем заменить существующий промпт, иначе отправим новое
+        edited = False
+        try:
+            if prompt_message_id:
+                edited = await edit_video_message(chat_id, prompt_message_id, video_path='assets/5.mp4', caption=text, reply_markup=get_in_deal_keyboard(deal_id, 'waiting_for_participant'), parse_mode='Markdown')
+        except Exception:
+            edited = False
+        if not edited:
+            await send_video_without_sound(chat_id, 'assets/5.mp4', caption=text, reply_markup=get_in_deal_keyboard(deal_id, 'waiting_for_participant'), parse_mode='Markdown')
         await bot.delete_state(user_id, chat_id)
     except Exception as e:
         logger.error(f"Error in handle_amount for user {user_id}: {e}")
@@ -1323,15 +1489,13 @@ async def handle_details_input(message):
         await bot.send_message(chat_id, "⚠ Введите реквизиты текстом.")
         return
 
-    # Удаление сообщений
+    # Удаляем сообщения пользователя и предыдущее сообщение бота
     try:
-        if prompt_message_id:
-            await bot.delete_message(chat_id, prompt_message_id)
-            logger.info(f"Deleted prompt message {prompt_message_id} for user {user_id}")
+        # Удаляем сообщение пользователя
         await bot.delete_message(chat_id, message.message_id)
         logger.info(f"Deleted input message {message.message_id} for user {user_id}")
     except Exception as e:
-        logger.error(f"Error deleting messages for user {user_id}: {e}")
+        logger.error(f"Error deleting user message for user {user_id}: {e}")
 
     # Сохранение реквизитов в Firestore
     try:
@@ -1354,23 +1518,37 @@ async def handle_details_input(message):
         await bot.send_message(chat_id, "⚠ Ошибка при сохранении реквизитов. Пожалуйста, попробуйте снова или обратитесь в поддержку @SecureHomeSupport.")
         return
 
-    # Отправка подтверждения
-    try:
-        await bot.send_message(chat_id, "✅ Ваши реквизиты успешно сохранены!")
-        logger.info(f"Sent confirmation to user {user_id}")
-    except Exception as e:
-        logger.error(f"Error sending confirmation message to user {user_id}: {e}")
-
     # Обработка состояния
     try:
+        # Отправляем видео 8.mp4 с подтверждением сохранения реквизитов
+        # Удаляем сообщение-промпт с инструкцией, если оно было
+        if prompt_message_id:
+            try:
+                await bot.delete_message(chat_id, prompt_message_id)
+            except Exception:
+                pass
+        # Отправляем подтверждение отдельным сообщением
+        await send_video_without_sound(
+            chat_id, 
+            'assets/8.mp4', 
+            caption="✅ *Ваши реквизиты успешно сохранены!*", 
+            parse_mode='Markdown'
+        )
+        
         if pending_deal_id:
+            # Для сделки переходим к сделке после показа подтверждения
             logger.info(f"Continuing deal {pending_deal_id} for user {user_id}")
             await bot.delete_state(user_id, chat_id)
+            
+            # Небольшая задержка для показа подтверждения
+            await asyncio.sleep(2)
+            
+            # Переходим к сделке
             await complete_deal_join(chat_id, user_id, message.from_user.username, pending_deal_id)
         else:
-            logger.info(f"Returning to main menu for user {user_id}")
+            # Если это не сделка, просто удаляем состояние
+            logger.info(f"Details saved for user {user_id}, no pending deal")
             await bot.delete_state(user_id, chat_id)
-            await show_main_menu(chat_id, message.from_user.first_name)
     except Exception as e:
         logger.error(f"Error processing state for user {user_id}: {e}")
         await bot.send_message(chat_id, "⚠ Ошибка при обработке состояния. Обратитесь в поддержку @SecureHomeSupport.")
@@ -1403,6 +1581,90 @@ async def on_shutdown():
         logger.info("Webhook removed")
     except Exception as e:
         logger.error(f"Error removing webhook: {e}")
+
+def escape_telegram_markdown(text):
+    """
+    Экранирует специальные символы для Markdown в Telegram
+    """
+    escape_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}']
+    for char in escape_chars:
+        text = text.replace(char, f'\\{char}')
+    return text
+
+def get_escaped_bot_username():
+    """
+    Возвращает экранированное имя бота для использования в ссылках
+    """
+    return escape_telegram_markdown(BOT_USERNAME)
+
+# Обновляем создание ссылки для присоединения к сделке
+def generate_join_link(deal_id):
+    """
+    Генерирует ссылку для присоединения к сделке
+    """
+    return f"https://t.me/{BOT_USERNAME}?start=deal_{deal_id}"
+
+def escape_markdown_v2(text):
+    """
+    Экранирует специальные символы для Markdown V2 в Telegram
+    """
+    if not text:
+        return text
+    
+    # Сначала убираем уже существующие экранирования, чтобы избежать двойного экранирования
+    text = text.replace('\\', '')
+    
+    escape_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}']
+    for char in escape_chars:
+        text = text.replace(char, f'\\{char}')
+    return text
+
+@bot.callback_query_handler(func=lambda call: call.data == "my_profile")
+async def my_profile_handler(call):
+    chat_id = call.message.chat.id
+    try:
+        profile_ref = db.collection('user_profile').document(str(call.from_user.id))
+        if not profile_ref.get().exists:
+            profile_ref.set({
+                'user_id': call.from_user.id,
+                'username': call.from_user.username,
+                'balance': 0.0,
+                'successful_deals': 0,
+                'language': 'ru',
+                'is_banned_from_admin': 0
+            })
+        profile = profile_ref.get().to_dict()
+        username = profile.get('username', 'Без имени')
+        balance = profile.get('balance', 0.0)
+        successful_deals = profile.get('successful_deals', 0)
+        
+        admin_ids = get_admin_ids()
+        balance_text = "∞" if call.from_user.id in admin_ids else f"{balance:.2f}"
+        
+        # Экранируем; добавляем @ к username
+        display_username = f"@{username}" if username else 'Без имени'
+        escaped_username = escape_markdown_v2(display_username)
+        
+        text = (
+            "*👤 Ваш профиль*\n\n"
+            f"*👋 Пользователь:* {escaped_username}\n"
+            f"*💰 Баланс:* `{balance_text}`\n"
+            f"*🏆 Успешных сделок:* `{successful_deals}`\n\n"
+            f"🚀 *Осуществляйте новые сделки с Secure Deal — с нами вы можете быть уверены в надежности и честности каждой операции. ⚡️*"
+        )
+        
+        # Редактируем текущее сообщение вместо удаления
+        if not await edit_video_message(chat_id, call.message.message_id, video_path='assets/1.mp4', caption=text, reply_markup=get_profile_keyboard(get_user_language(chat_id)), parse_mode='Markdown'):
+            await send_video_without_sound(
+                chat_id, 
+                'assets/1.mp4', 
+                caption=text, 
+                reply_markup=get_profile_keyboard(get_user_language(chat_id)), 
+                parse_mode='Markdown'
+            )
+    except Exception as e:
+        logger.error(f"Error in my_profile for user {call.from_user.id}: {e}")
+        await bot.send_message(chat_id, "⚠ Ошибка при отображении профиля. Обратитесь в поддержку @SecureHomeSupport.")
 
 if __name__ == '__main__':
     try:
