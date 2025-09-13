@@ -320,21 +320,54 @@ def update_user_balance(user_id, amount):
         return
     try:
         profile_ref = db.collection('user_profile').document(str(user_id))
-        profile = profile_ref.get().to_dict() or {}
-        current_balance = profile.get('balance', 0.0)
-        profile_ref.update({'balance': current_balance + amount})
-        logger.info(f"Updated balance for user {user_id}: {current_balance + amount}")
-        _PROFILE_CACHE['map'].pop(user_id, None)
+        profile_doc = profile_ref.get()
+        
+        if profile_doc.exists:
+            # Документ существует - используем update
+            profile = profile_doc.to_dict() or {}
+            current_balance = profile.get('balance', 0.0)
+            profile_ref.update({'balance': current_balance + amount})
+            logger.info(f"Updated balance for user {user_id}: {current_balance + amount}")
+        else:
+            # Документ не существует - создаем новый
+            profile_ref.set({
+                'user_id': user_id,
+                'username': None,  # Будет заполнено позже
+                'balance': max(0.0, amount),  # Не допускаем отрицательный баланс при создании
+                'successful_deals': 0,
+                'language': 'ru',
+                'is_banned_from_admin': 0
+            })
+            logger.info(f"Created profile with balance for user {user_id}: {max(0.0, amount)}")
+            
+        _PROFILE_CACHE['map'].pop(user_id, None)  # Очищаем кэш
+        
     except Exception as e:
         logger.error(f"Error updating balance for {user_id}: {e}")
 
 def increment_successful_deals(user_id):
     try:
         profile_ref = db.collection('user_profile').document(str(user_id))
-        profile = profile_ref.get().to_dict() or {}
-        current_deals = profile.get('successful_deals', 0)
-        profile_ref.update({'successful_deals': current_deals + 1})
-        logger.info(f"Incremented successful deals for user {user_id}: {current_deals + 1}")
+        profile_doc = profile_ref.get()
+        
+        if profile_doc.exists:
+            # Документ существует - используем update
+            profile = profile_doc.to_dict() or {}
+            current_deals = profile.get('successful_deals', 0)
+            profile_ref.update({'successful_deals': current_deals + 1})
+            logger.info(f"Incremented successful deals for user {user_id}: {current_deals + 1}")
+        else:
+            # Документ не существует - создаем новый
+            profile_ref.set({
+                'user_id': user_id,
+                'username': None,  # Будет заполнено позже
+                'balance': 0.0,
+                'successful_deals': 1,
+                'language': 'ru',
+                'is_banned_from_admin': 0
+            })
+            logger.info(f"Created profile and set successful deals for user {user_id}: 1")
+            
     except Exception as e:
         logger.error(f"Error incrementing successful deals for {user_id}: {e}")
 
@@ -809,13 +842,32 @@ async def handle_setmedealsmnogo(message):
             if len(args) < 2:
                 await bot.reply_to(message, f"⚠ {user_mention}, укажите количество сделок. Пример: /setmedealsmnogo 10", parse_mode='HTML')
                 return
+                
             deals_count = int(args[1])
             if deals_count < 0:
                 raise ValueError
+                
             profile_ref = db.collection('user_profile').document(str(user_id))
-            profile_ref.update({'successful_deals': deals_count})
-            logger.info(f"Set successful deals for user {user_id}: {deals_count}")
+            profile_doc = profile_ref.get()
+            
+            if profile_doc.exists:
+                # Документ существует - используем update
+                profile_ref.update({'successful_deals': deals_count})
+                logger.info(f"Set successful deals for user {user_id}: {deals_count}")
+            else:
+                # Документ не существует - создаем новый с полным профилем
+                profile_ref.set({
+                    'user_id': user_id,
+                    'username': message.from_user.username,
+                    'balance': 0.0,
+                    'successful_deals': deals_count,
+                    'language': 'ru',
+                    'is_banned_from_admin': 0
+                })
+                logger.info(f"Created profile with successful deals for user {user_id}: {deals_count}")
+                
             await bot.reply_to(message, f"✅ {user_mention}, ваш счетчик успешных сделок обновлен до {deals_count}.", parse_mode='HTML')
+            
         except ValueError:
             await bot.reply_to(message, f"⚠ {user_mention}, укажите корректное число сделок.", parse_mode='HTML')
         except Exception as e:
